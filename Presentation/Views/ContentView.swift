@@ -34,23 +34,29 @@ struct MainTabView: View {
                 }
                 .tag(1)
             
+            PromisesView()
+                .tabItem {
+                    Label("承诺", systemImage: "checklist")
+                }
+                .tag(2)
+            
             RecordingView()
                 .tabItem {
                     Label("记录", systemImage: "mic.fill")
                 }
-                .tag(2)
+                .tag(3)
             
             AnalysisView()
                 .tabItem {
                     Label("分析", systemImage: "chart.bar.fill")
                 }
-                .tag(3)
+                .tag(4)
             
             SettingsView()
                 .tabItem {
                     Label("设置", systemImage: "gear")
                 }
-                .tag(4)
+                .tag(5)
         }
         .tint(ThemeManager.Colors.primary)
     }
@@ -59,13 +65,33 @@ struct MainTabView: View {
 // MARK: - 首页视图
 struct HomeView: View {
     @Query private var profiles: [Profile]
+    @Query(sort: \Promise.dueDate, order: .forward) private var promises: [Promise]
+    @Query(sort: \RecordingSession.createdAt, order: .reverse) private var sessions: [RecordingSession]
+    
+    var averageHealthScore: Int {
+        guard !profiles.isEmpty else { return 0 }
+        let total = profiles.reduce(0) { $0 + $1.healthScore }
+        return total / profiles.count
+    }
+    
+    var streakDays: Int {
+        // 简化计算：有承诺完成就算连续
+        let completedToday = promises.filter { 
+            $0.isCompleted && Calendar.current.isDateInToday($0.completedAt ?? Date.distantPast)
+        }.count
+        return completedToday > 0 ? 15 : 0 // 简化逻辑
+    }
+    
+    var pendingPromises: [Promise] {
+        promises.filter { !$0.isCompleted && !$0.isOverdue }
+    }
     
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: ThemeManager.Spacing.lg) {
                     // 健康度卡片
-                    HealthScoreCard(score: 82, streakDays: 15)
+                    HealthScoreCard(score: averageHealthScore, streakDays: streakDays)
                     
                     // 快速操作
                     QuickActionsGrid()
@@ -321,39 +347,67 @@ struct ActivityItem: View {
 
 // MARK: - 待办提醒
 struct TodoSection: View {
+    @Query(filter: #Predicate<Promise> { !$0.isCompleted }) private var pendingPromises: [Promise]
+    
     var body: some View {
         VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
             Text("待办提醒")
                 .font(ThemeManager.Typography.title3)
                 .foregroundColor(ThemeManager.Colors.textPrimary)
             
-            HStack(spacing: ThemeManager.Spacing.md) {
-                Image(systemName: "bell.fill")
-                    .font(.title2)
-                    .foregroundColor(ThemeManager.Colors.accent)
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("本周承诺自查")
-                        .font(ThemeManager.Typography.subheadline)
-                        .foregroundColor(ThemeManager.Colors.textPrimary)
+            if pendingPromises.isEmpty {
+                // 空状态
+                HStack(spacing: ThemeManager.Spacing.md) {
+                    Image(systemName: "checkmark.shield.fill")
+                        .font(.title2)
+                        .foregroundColor(ThemeManager.Colors.secondary)
                     
-                    Text("还有2条承诺待确认")
-                        .font(ThemeManager.Typography.caption)
-                        .foregroundColor(ThemeManager.Colors.textSecondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("所有承诺已完成")
+                            .font(ThemeManager.Typography.subheadline)
+                            .foregroundColor(ThemeManager.Colors.textPrimary)
+                        
+                        Text("继续保持！")
+                            .font(ThemeManager.Typography.caption)
+                            .foregroundColor(ThemeManager.Colors.textSecondary)
+                    }
+                    
+                    Spacer()
                 }
-                
-                Spacer()
-                
-                Button("去查看") {
-                    // 导航到承诺页面
+                .padding(ThemeManager.Spacing.md)
+                .background(Color.white)
+                .cornerRadius(ThemeManager.Radius.md)
+                .shadow(ThemeManager.Shadows.sm)
+            } else {
+                // 显示待办
+                HStack(spacing: ThemeManager.Spacing.md) {
+                    Image(systemName: "bell.fill")
+                        .font(.title2)
+                        .foregroundColor(ThemeManager.Colors.accent)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("本周承诺自查")
+                            .font(ThemeManager.Typography.subheadline)
+                            .foregroundColor(ThemeManager.Colors.textPrimary)
+                        
+                        Text("还有\(pendingPromises.count)条承诺待完成")
+                            .font(ThemeManager.Typography.caption)
+                            .foregroundColor(ThemeManager.Colors.textSecondary)
+                    }
+                    
+                    Spacer()
+                    
+                    Button("去查看") {
+                        // 导航到承诺页面
+                    }
+                    .font(ThemeManager.Typography.subheadline)
+                    .foregroundColor(ThemeManager.Colors.primary)
                 }
-                .font(ThemeManager.Typography.subheadline)
-                .foregroundColor(ThemeManager.Colors.primary)
+                .padding(ThemeManager.Spacing.md)
+                .background(Color.white)
+                .cornerRadius(ThemeManager.Radius.md)
+                .shadow(ThemeManager.Shadows.sm)
             }
-            .padding(ThemeManager.Spacing.md)
-            .background(Color.white)
-            .cornerRadius(ThemeManager.Radius.md)
-            .shadow(ThemeManager.Shadows.sm)
         }
     }
 }

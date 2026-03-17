@@ -15,8 +15,13 @@ struct ProfilesView: View {
                     // 人物列表
                     LazyVStack(spacing: ThemeManager.Spacing.md) {
                         ForEach(profiles) { profile in
-                            ProfileCard(profile: profile)
+                            NavigationLink(value: profile) {
+                                ProfileCard(profile: profile)
+                            }
                         }
+                    }
+                    .navigationDestination(for: Profile.self) { profile in
+                        ProfileDetailView(profile: profile)
                     }
                     
                     // 添加按钮
