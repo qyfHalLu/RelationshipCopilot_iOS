@@ -3,7 +3,7 @@ import SwiftData
 
 // MARK: - 承诺管理主视图
 struct PromisesView: View {
-    @Query(sort: \Promise.dueDate, order: .forward) private var promises: [Promise]
+    @Query(sort: \Promise.deadline, order: .forward) private var promises: [Promise]
     @State private var showAddPromise = false
     @State private var selectedFilter: PromiseFilter = .all
     

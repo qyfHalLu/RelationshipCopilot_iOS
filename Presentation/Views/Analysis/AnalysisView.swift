@@ -146,7 +146,7 @@ struct EmptyHistoryView: View {
 // MARK: - 历史项
 struct HistoryItem: View {
     let session: RecordingSession
-    @State private var isPressed = false
+    @State private var isPressed = false } })
     
     var body: some View {
         Button(action: {
@@ -197,13 +197,13 @@ struct HistoryItem: View {
             .scaleEffect(isPressed ? 0.98 : 1.0)
         }
         .buttonStyle(PlainButtonStyle())
-        .pressEvents {
+        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in
             withAnimation(.easeInOut(duration: 0.1)) {
                 isPressed = true
             }
-        } onRelease: {
+        }.onEnded { _ in
             withAnimation(.easeInOut(duration: 0.1)) {
-                isPressed = false
+                isPressed = false } })
             }
         }
     }
