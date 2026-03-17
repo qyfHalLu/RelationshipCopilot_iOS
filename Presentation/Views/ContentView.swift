@@ -208,6 +208,11 @@ struct HealthScoreCard: View {
 
 // MARK: - 快速操作网格
 struct QuickActionsGrid: View {
+    @State private var showActionSheet = false
+    @State private var selectedAction: String = ""
+    @State private var showActionDetail = false
+    @State private var actionContent = ""
+    
     let actions = [
         ("吵架复盘", "bubble.left.and.bubble.right.fill", Color.purple),
         ("话术急救", "bandage.fill", Color.blue),
@@ -227,9 +232,15 @@ struct QuickActionsGrid: View {
                         title: action.0,
                         icon: action.1,
                         color: action.2
-                    )
+                    ) {
+                        selectedAction = action.0
+                        showActionDetail = true
+                    }
                 }
             }
+        }
+        .sheet(isPresented: $showActionDetail) {
+            ActionResultSheet(action: selectedAction, content: actionContent)
         }
     }
 }
@@ -239,11 +250,12 @@ struct QuickActionButton: View {
     let title: String
     let icon: String
     let color: Color
+    let action: () -> Void
     @State private var isPressed = false
     
     var body: some View {
         Button(action: {
-            // 操作
+            action()
         }) {
             HStack(spacing: ThemeManager.Spacing.sm) {
                 Image(systemName: icon)
@@ -261,7 +273,7 @@ struct QuickActionButton: View {
             .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
             .scaleEffect(isPressed ? 0.96 : 1.0)
         }
-        .buttonStyle(ScaleButtonStyle())
+        .buttonStyle(PlainButtonStyle())
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in
@@ -275,6 +287,56 @@ struct QuickActionButton: View {
                     }
                 }
         )
+    }
+}
+
+// MARK: - 功能结果展示
+struct ActionResultSheet: View {
+    let action: String
+    let content: String
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: ThemeManager.Spacing.lg) {
+                    Text(action)
+                        .font(ThemeManager.Typography.title2)
+                        .foregroundColor(ThemeManager.Colors.textPrimary)
+                    
+                    Divider()
+                    
+                    Text(resultContent)
+                        .font(ThemeManager.Typography.body)
+                        .foregroundColor(ThemeManager.Colors.textPrimary)
+                        .padding(.top, ThemeManager.Spacing.md)
+                }
+                .padding(ThemeManager.Spacing.lg)
+            }
+            .background(ThemeManager.Colors.background)
+            .navigationTitle("功能演示")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") { dismiss() }
+                }
+            }
+        }
+    }
+    
+    private var resultContent: String {
+        switch action {
+        case "吵架复盘":
+            return "复盘建议：\n\n1. 冷静下来后，先各自陈述事实\n2. 避免使用"你总是"、"你从不"这类词\n3. 表达感受而不是指责\n4. 找到双方都能接受的解决方案"
+        case "话术急救":
+            return "建议话术：\n\n"我可以理解你的感受" "我们一起想办法" "我需要你的帮助""
+        case "道歉生成":
+            return "道歉模板：\n\n"对不起，我意识到我的行为让你不舒服。我爱您，以后会多注意。请给我一个改正的机会。""
+        case "关系体检":
+            return "健康度评估：\n\n沟通频率：良好\n情感表达：良好\n冲突处理：需改进\n建议：每周至少深入交流1次"
+        default:
+            return "功能开发中..."
+        }
     }
 }
 
