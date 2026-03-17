@@ -19,12 +19,20 @@ class ManualConflictRecordingService {
     // MARK: - 检查权限
     func checkPermissions() async -> Bool {
         // 检查麦克风权限
-        let micStatus = await AVAudioSession.sharedInstance().requestRecordPermission()
+        let micGranted = await withCheckedContinuation { continuation in
+            AVAudioApplication.requestRecordPermission { granted in
+                continuation.resume(returning: granted)
+            }
+        }
         
         // 检查语音识别权限
-        let speechStatus = await SFSpeechRecognizer.requestAuthorization()
+        let speechStatus = await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status)
+            }
+        }
         
-        return micStatus && speechStatus == .authorized
+        return micGranted && speechStatus == .authorized
     }
     
     // MARK: - 开始录音
@@ -72,15 +80,14 @@ class ManualConflictRecordingService {
     
     // MARK: - 音频转录
     private func transcribeAudio() async {
-        guard let audioURL = audioRecorder?.url else { return }
+        guard let audioURL = audioRecorder?.url,
+              let recognizer = speechRecognizer else { return }
         
-        let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))
         let request = SFSpeechURLRecognitionRequest(url: audioURL)
         
         do {
-            if let result = try await recognizer?.recognitionTask(with: request) {
-                transcription = result.bestTranscription.formattedString
-            }
+            let result = try await recognizer.recognitionTask(with: request)
+            transcription = result.bestTranscription.formattedString
         } catch {
             self.error = .transcriptionFailed(error)
         }
@@ -99,14 +106,10 @@ class ManualConflictRecordingService {
         }
     }
     
-    // MARK: - 获取录音文件URL
-    func getRecordingURL() -> URL? {
-        return audioRecorder?.url
-    }
-    
+    // MARK: - 计时器
     private func startTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            self.recordingDuration += 1
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.recordingDuration += 1
         }
     }
     
@@ -116,10 +119,20 @@ class ManualConflictRecordingService {
     }
 }
 
-enum RecordingError: Error {
+// MARK: - 错误类型
+enum RecordingError: LocalizedError {
     case permissionDenied
     case setupFailed
     case transcriptionFailed(Error)
-    case audioTooShort
-    case audioTooLong
+    
+    var errorDescription: String? {
+        switch self {
+        case .permissionDenied:
+            return "录音权限被拒绝"
+        case .setupFailed:
+            return "录音设置失败"
+        case .transcriptionFailed(let error):
+            return "转录失败: \(error.localizedDescription)"
+        }
+    }
 }

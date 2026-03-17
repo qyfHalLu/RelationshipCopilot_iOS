@@ -16,11 +16,16 @@ enum ThemeManager {
         // 辅助色
         static let secondary = Color(hex: "10B981")    // 翠绿色
         static let accent = Color(hex: "F59E0B")       // 琥珀色
+        static let accent1 = Color(hex: "8B5CF6")      // 紫色
+        static let accent2 = Color(hex: "EC4899")      // 粉色
+        static let accent3 = Color(hex: "14B8A6")     // 青色
+        static let accent4 = Color(hex: "F97316")      // 橙色
         static let danger = Color(hex: "EF4444")       // 红色
         
         // 中性色
         static let background = Color(hex: "F8FAFC")
         static let surface = Color.white
+        static let cardBackground = Color.white
         static let textPrimary = Color(hex: "1E293B")
         static let textSecondary = Color(hex: "64748B")
         static let border = Color(hex: "E2E8F0")
