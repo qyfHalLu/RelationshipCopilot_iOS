@@ -290,7 +290,7 @@ struct QuickToolDetailView: View {
         }
     }
     
-    private func copyToClipboard {
+    private func copyToClipboard() {
         UIPasteboard.general.string = aiResponse
     }
 }
