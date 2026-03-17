@@ -108,31 +108,6 @@ struct ProfileDetailView: View {
     }
 }
 
-// MARK: - 空状态视图
-struct EmptyStateView: View {
-    let icon: String
-    let title: String
-    let subtitle: String
-    
-    var body: some View {
-        VStack(spacing: ThemeManager.Spacing.lg) {
-            Image(systemName: icon)
-                .font(.system(size: 64))
-                .foregroundColor(ThemeManager.Colors.border)
-            
-            Text(title)
-                .font(ThemeManager.Typography.title3)
-                .foregroundColor(ThemeManager.Colors.textPrimary)
-            
-            Text(subtitle)
-                .font(ThemeManager.Typography.callout)
-                .foregroundColor(ThemeManager.Colors.textSecondary)
-                .multilineTextAlignment(.center)
-        }
-        .padding(.top, 60)
-    }
-}
-
 #Preview {
     NavigationStack {
         ProfileDetailView(profile: Profile(name: "测试", relationshipType: "partner"))
