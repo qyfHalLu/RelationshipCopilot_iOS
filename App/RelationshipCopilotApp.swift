@@ -4,11 +4,13 @@ import SwiftData
 @main
 struct RelationshipCopilotApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @AppStorage("darkMode") private var darkMode = false
     
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(AuthenticationService())
+                .preferredColorScheme(darkMode ? .dark : .light)
         }
         .modelContainer(for: [
             User.self,
@@ -24,13 +26,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        // 配置Firebase或其他服务
         configureAppearance()
         return true
     }
     
     private func configureAppearance() {
-        // 全局外观配置
         UINavigationBar.appearance().tintColor = .systemBlue
         UITabBar.appearance().tintColor = .systemBlue
     }

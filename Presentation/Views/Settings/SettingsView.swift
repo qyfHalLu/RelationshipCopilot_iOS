@@ -81,15 +81,11 @@ struct UserSection: View {
 struct GeneralSection: View {
     @AppStorage("darkMode") private var darkMode = false
     @AppStorage("hapticFeedback") private var hapticFeedback = true
-    @Environment(\.colorScheme) private var colorScheme
     
     var body: some View {
         Section("通用") {
             Toggle(isOn: $darkMode) {
                 Label("深色模式", systemImage: "moon.fill")
-            }
-            .onChange(of: darkMode) { _, newValue in
-                // 深色模式通过ScenePreferences全局控制
             }
             
             Toggle(isOn: $hapticFeedback) {

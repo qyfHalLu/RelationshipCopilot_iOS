@@ -46,17 +46,17 @@ struct MainTabView: View {
                 }
                 .tag(3)
             
+            QuickToolsView()
+                .tabItem {
+                    Label("工具", systemImage: "wrench.and.screwdriver.fill")
+                }
+                .tag(4)
+            
             AnalysisView()
                 .tabItem {
                     Label("分析", systemImage: "chart.bar.fill")
                 }
-                .tag(4)
-            
-            SettingsView()
-                .tabItem {
-                    Label("设置", systemImage: "gear")
-                }
-                .tag(5)
+                .tag(6)
         }
         .tint(ThemeManager.Colors.primary)
     }
@@ -91,8 +91,8 @@ struct HomeView: View {
                     // 健康度卡片
                     HealthScoreCard(score: averageHealthScore, streakDays: streakDays)
                     
-                    // 快速操作
-                    QuickActionsGrid()
+                    // 快速操作 - 完整功能
+                    QuickToolsView()
                     
                     // 最近动态
                     RecentActivitySection()
