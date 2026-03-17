@@ -9,7 +9,6 @@ struct RelationshipCopilotApp: App {
         WindowGroup {
             ContentView()
                 .environment(AuthenticationService())
-                .environment(ThemeManager())
         }
         .modelContainer(for: [
             User.self,
