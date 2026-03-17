@@ -3,7 +3,7 @@ import SwiftData
 
 // MARK: - 承诺管理主视图
 struct PromisesView: View {
-    @Query(sort: \Promise.deadline, order: .forward) private var promises: [Promise]
+    @Query(sort: \Promise.committedAt, order: .reverse) private var promises: [Promise]
     @State private var showAddPromise = false
     @State private var selectedFilter: PromiseFilter = .all
     
@@ -11,7 +11,6 @@ struct PromisesView: View {
         case all = "全部"
         case pending = "待完成"
         case completed = "已完成"
-        case overdue = "已逾期"
     }
     
     var filteredPromises: [Promise] {
@@ -19,11 +18,9 @@ struct PromisesView: View {
         case .all:
             return promises
         case .pending:
-            return promises.filter { !$0.isCompleted && !$0.isOverdue }
+            return promises.filter { $0.trackingStatus == "active" }
         case .completed:
-            return promises.filter { $0.isCompleted }
-        case .overdue:
-            return promises.filter { $0.isOverdue && !$0.isCompleted }
+            return promises.filter { $0.trackingStatus == "closed" }
         }
     }
     
@@ -31,18 +28,20 @@ struct PromisesView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: ThemeManager.Spacing.lg) {
-                    // 承诺统计
+                    // 统计卡片
                     PromiseStatsCard(promises: promises)
                     
                     // 筛选器
-                    FilterSegmentedControl(
-                        selectedFilter: $selectedFilter,
-                        filters: PromiseFilter.allCases
-                    )
+                    Picker("筛选", selection: $selectedFilter) {
+                        ForEach(PromiseFilter.allCases, id: \.self) { filter in
+                            Text(filter.rawValue).tag(filter)
+                        }
+                    }
+                    .pickerStyle(.segmented)
                     
                     // 承诺列表
                     if filteredPromises.isEmpty {
-                        EmptyPromisesView(filter: selectedFilter)
+                        EmptyPromiseView()
                     } else {
                         LazyVStack(spacing: ThemeManager.Spacing.md) {
                             ForEach(filteredPromises) { promise in
@@ -73,161 +72,114 @@ struct PromisesView: View {
     }
 }
 
-// MARK: - 承诺统计卡片
+// MARK: - 统计卡片
 struct PromiseStatsCard: View {
     let promises: [Promise]
-    @State private var isAnimating = false
+    
+    var activeCount: Int {
+        promises.filter { $0.trackingStatus == "active" }.count
+    }
+    
+    var completedCount: Int {
+        promises.filter { $0.trackingStatus == "closed" }.count
+    }
     
     var completionRate: Double {
         guard !promises.isEmpty else { return 0 }
-        let completed = promises.filter { $0.isCompleted }.count
-        return Double(completed) / Double(promises.count) * 100
-    }
-    
-    var overdueCount: Int {
-        promises.filter { $0.isOverdue && !$0.isCompleted }.count
+        return Double(completedCount) / Double(promises.count) * 100
     }
     
     var body: some View {
-        VStack(spacing: ThemeManager.Spacing.lg) {
-            HStack {
-                Text("本月承诺概览")
-                    .font(ThemeManager.Typography.title3)
-                    .foregroundColor(ThemeManager.Colors.textPrimary)
-                
-                Spacer()
-                
-                if overdueCount > 0 {
-                    HStack(spacing: 4) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.red)
-                        Text("\(overdueCount)条逾期")
-                            .font(ThemeManager.Typography.caption)
-                            .foregroundColor(.red)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.red.opacity(0.1))
-                    .cornerRadius(ThemeManager.Radius.full)
-                }
+        HStack(spacing: ThemeManager.Spacing.lg) {
+            VStack(spacing: ThemeManager.Spacing.xs) {
+                Text("\(activeCount)")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundColor(ThemeManager.Colors.primary)
+                Text("进行中")
+                    .font(ThemeManager.Typography.caption)
+                    .foregroundColor(ThemeManager.Colors.textSecondary)
             }
             
-            HStack(spacing: ThemeManager.Spacing.lg) {
-                StatItem(
-                    icon: "checklist",
-                    value: "\(promises.count)",
-                    label: "总承诺",
-                    color: ThemeManager.Colors.primary
-                )
-                
-                Divider()
-                
-                StatItem(
-                    icon: "checkmark.circle.fill",
-                    value: "\(Int(completionRate))%",
-                    label: "履约率",
-                    color: ThemeManager.Colors.secondary
-                )
-                
-                Divider()
-                
-                StatItem(
-                    icon: "clock.fill",
-                    value: "\(promises.filter { !$0.isCompleted }.count)",
-                    label: "待完成",
-                    color: ThemeManager.Colors.accent
-                )
+            Divider().frame(height: 40)
+            
+            VStack(spacing: ThemeManager.Spacing.xs) {
+                Text("\(completedCount)")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundColor(ThemeManager.Colors.secondary)
+                Text("已完成")
+                    .font(ThemeManager.Typography.caption)
+                    .foregroundColor(ThemeManager.Colors.textSecondary)
+            }
+            
+            Divider().frame(height: 40)
+            
+            VStack(spacing: ThemeManager.Spacing.xs) {
+                Text("\(Int(completionRate))%")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundColor(ThemeManager.Colors.accent)
+                Text("完成率")
+                    .font(ThemeManager.Typography.caption)
+                    .foregroundColor(ThemeManager.Colors.textSecondary)
             }
         }
         .padding(ThemeManager.Spacing.lg)
         .background(Color.white)
-        .cornerRadius(ThemeManager.Radius.lg)
-        .shadow(ThemeManager.Shadows.md)
-        .opacity(isAnimating ? 1 : 0)
-        .offset(y: isAnimating ? 0 : 20)
-        .onAppear {
-            withAnimation(.easeOut(duration: 0.5)) {
-                isAnimating = true
-            }
-        }
-    }
-}
-
-// MARK: - 筛选分段控制器
-struct FilterSegmentedControl<T: CaseIterable & RawRepresentable & Hashable>: View where T.RawValue == String {
-    @Binding var selectedFilter: T
-    let filters: [T]
-    
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: ThemeManager.Spacing.sm) {
-                ForEach(filters, id: \.self) { filter in
-                    Button(action: { selectedFilter = filter }) {
-                        Text(filter.rawValue)
-                            .font(ThemeManager.Typography.subheadline)
-                            .fontWeight(selectedFilter == filter ? .semibold : .regular)
-                            .foregroundColor(selectedFilter == filter ? .white : ThemeManager.Colors.textPrimary)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(
-                                selectedFilter == filter
-                                ? ThemeManager.Colors.primary
-                                : Color.white
-                            )
-                            .cornerRadius(ThemeManager.Radius.full)
-                    }
-                }
-            }
-        }
+        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.lg))
+        .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
     }
 }
 
 // MARK: - 承诺卡片
 struct PromiseCard: View {
-    @Bindable var promise: Promise
+    let promise: Promise
     @State private var showDetail = false
     
     var body: some View {
         Button(action: { showDetail = true }) {
-            HStack(spacing: ThemeManager.Spacing.md) {
-                // 完成状态
-                Button(action: { toggleCompletion() }) {
-                    Image(systemName: promise.isCompleted ? "checkmark.circle.fill" : "circle")
-                        .font(.title2)
-                        .foregroundColor(promise.isCompleted ? ThemeManager.Colors.secondary : ThemeManager.Colors.border)
+            VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
+                HStack {
+                    Text(promise.content)
+                        .font(ThemeManager.Typography.headline)
+                        .foregroundColor(ThemeManager.Colors.textPrimary)
+                        .lineLimit(2)
+                    
+                    Spacer()
+                    
+                    statusBadge
                 }
                 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(promise.title)
-                        .font(ThemeManager.Typography.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(promise.isCompleted ? ThemeManager.Colors.textSecondary : ThemeManager.Colors.textPrimary)
-                        .strikethrough(promise.isCompleted)
+                HStack {
+                    Image(systemName: "calendar")
+                        .font(.caption)
+                        .foregroundColor(ThemeManager.Colors.textSecondary)
                     
-                    HStack(spacing: 8) {
-                        Label(promise.dueDate.formatted(.dateTime.month().day()), systemImage: "calendar")
+                    Text(formattedDate)
+                        .font(ThemeManager.Typography.caption)
+                        .foregroundColor(ThemeManager.Colors.textSecondary)
+                    
+                    if let deadline = promise.deadline {
+                        Text("• 截止: \(formatDate(deadline))")
                             .font(ThemeManager.Typography.caption)
-                            .foregroundColor(promise.isOverdue && !promise.isCompleted ? .red : ThemeManager.Colors.textSecondary)
-                        
-                        if let profile = promise.relatedProfile {
-                            Label(profile.name, systemImage: "person.fill")
+                            .foregroundColor(ThemeManager.Colors.textSecondary)
+                    }
+                    
+                    Spacer()
+                    
+                    if promise.fulfillmentRate > 0 {
+                        HStack(spacing: 2) {
+                            Image(systemName: "chart.bar.fill")
+                                .font(.caption)
+                            Text("\(Int(promise.fulfillmentRate * 100))%")
                                 .font(ThemeManager.Typography.caption)
-                                .foregroundColor(ThemeManager.Colors.textSecondary)
                         }
+                        .foregroundColor(ThemeManager.Colors.secondary)
                     }
                 }
-                
-                Spacer()
-                
-                // 优先级指示
-                Circle()
-                    .fill(priorityColor)
-                    .frame(width: 8, height: 8)
             }
             .padding(ThemeManager.Spacing.md)
             .background(Color.white)
-            .cornerRadius(ThemeManager.Radius.md)
-            .shadow(ThemeManager.Shadows.sm)
+            .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.lg))
+            .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
         }
         .buttonStyle(PlainButtonStyle())
         .sheet(isPresented: $showDetail) {
@@ -235,54 +187,46 @@ struct PromiseCard: View {
         }
     }
     
-    private var priorityColor: Color {
-        switch promise.priority {
-        case 1: return .red
-        case 2: return .orange
-        default: return .green
-        }
+    private var statusBadge: some View {
+        Text(promise.trackingStatus == "active" ? "进行中" : "已完成")
+            .font(ThemeManager.Typography.caption)
+            .foregroundColor(promise.trackingStatus == "active" ? ThemeManager.Colors.accent : ThemeManager.Colors.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                (promise.trackingStatus == "active" ? ThemeManager.Colors.accent : ThemeManager.Colors.secondary).opacity(0.1)
+            )
+            .clipShape(Capsule())
     }
     
-    private func toggleCompletion() {
-        withAnimation(.spring(duration: 0.3)) {
-            promise.isCompleted.toggle()
-            promise.completedAt = promise.isCompleted ? Date() : nil
-        }
+    private var formattedDate: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        return formatter.string(from: promise.committedAt)
+    }
+    
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        return formatter.string(from: date)
     }
 }
 
-// MARK: - 空承诺视图
-struct EmptyPromisesView: View {
-    let filter: PromisesView.PromiseFilter
-    
-    var message: String {
-        switch filter {
-        case .all: return "还没有任何承诺\n添加第一条承诺开始维护关系"
-        case .pending: return "没有待完成的承诺\n太棒了！"
-        case .completed: return "还没有已完成的承诺\n继续加油！"
-        case .overdue: return "没有逾期的承诺\n继续保持！"
-        }
-    }
-    
-    var icon: String {
-        switch filter {
-        case .all: return "checklist"
-        case .pending: return "checkmark.circle"
-        case .completed: return "star.circle"
-        case .overdue: return "checkmark.shield"
-        }
-    }
-    
+// MARK: - 空状态视图
+struct EmptyPromiseView: View {
     var body: some View {
         VStack(spacing: ThemeManager.Spacing.lg) {
-            Image(systemName: icon)
+            Image(systemName: "checkmark.circle")
                 .font(.system(size: 64))
-                .foregroundColor(ThemeManager.Colors.border)
+                .foregroundColor(ThemeManager.Colors.textSecondary.opacity(0.5))
             
-            Text(message)
-                .font(ThemeManager.Typography.callout)
+            Text("还没有承诺")
+                .font(ThemeManager.Typography.title3)
+                .foregroundColor(ThemeManager.Colors.textPrimary)
+            
+            Text("添加你们的第一个承诺吧")
+                .font(ThemeManager.Typography.subheadline)
                 .foregroundColor(ThemeManager.Colors.textSecondary)
-                .multilineTextAlignment(.center)
         }
         .padding(.top, 60)
     }
@@ -290,44 +234,43 @@ struct EmptyPromisesView: View {
 
 // MARK: - 添加承诺视图
 struct AddPromiseView: View {
-    @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
     
     @Query private var profiles: [Profile]
     
-    @State private var title = ""
-    @State private var notes = ""
-    @State private var dueDate = Date().addingTimeInterval(86400)
-    @State private var priority = 2
+    @State private var content: String = ""
     @State private var selectedProfile: Profile?
-    @State private var showError = false
+    @State private var deadline: Date = Date().addingTimeInterval(86400 * 7)
+    @State private var hasDeadline: Bool = false
     
     var body: some View {
         NavigationStack {
             Form {
                 Section("承诺内容") {
-                    TextField("例如：周末一起看电影", text: $title)
-                    
-                    TextField("备注（可选）", text: $notes, axis: .vertical)
+                    TextField("写下你的承诺...", text: $content, axis: .vertical)
                         .lineLimit(3...6)
                 }
                 
-                Section("设置") {
-                    DatePicker("截止日期", selection: $dueDate, displayedComponents: [.date, .hourAndMinute])
-                    
-                    Picker("优先级", selection: $priority) {
-                        Text("低").tag(3)
-                        Text("中").tag(2)
-                        Text("高").tag(1)
-                    }
-                    
-                    if !profiles.isEmpty {
-                        Picker("关联人物", selection: $selectedProfile) {
-                            Text("无").tag(nil as Profile?)
+                Section("关联人物") {
+                    if profiles.isEmpty {
+                        Text("请先添加人物")
+                            .foregroundColor(ThemeManager.Colors.textSecondary)
+                    } else {
+                        Picker("选择人物", selection: $selectedProfile) {
+                            Text("请选择").tag(nil as Profile?)
                             ForEach(profiles) { profile in
                                 Text(profile.name).tag(profile as Profile?)
                             }
                         }
+                    }
+                }
+                
+                Section("截止日期") {
+                    Toggle("设置截止日期", isOn: $hasDeadline)
+                    
+                    if hasDeadline {
+                        DatePicker("截止日期", selection: $deadline, displayedComponents: .date)
                     }
                 }
             }
@@ -342,133 +285,101 @@ struct AddPromiseView: View {
                     Button("保存") {
                         savePromise()
                     }
-                    .disabled(title.isEmpty)
+                    .disabled(content.isEmpty)
                 }
-            }
-            .alert("请输入承诺内容", isPresented: $showError) {
-                Button("确定", role: .cancel) {}
             }
         }
     }
     
     private func savePromise() {
-        guard !title.isEmpty else {
-            showError = true
-            return
+        let promise = Promise(content: content, promisor: "user", promisee: selectedProfile?.name ?? "partner")
+        promise.profile = selectedProfile
+        
+        if hasDeadline {
+            promise.deadline = deadline
         }
         
-        let promise = Promise(
-            title: title,
-            notes: notes.isEmpty ? nil : notes,
-            dueDate: dueDate,
-            priority: priority,
-            relatedProfile: selectedProfile
-        )
-        
         modelContext.insert(promise)
-        
-        // 安排通知
-        NotificationService.shared.schedulePromiseReminder(promise)
-        
         dismiss()
     }
 }
 
 // MARK: - 承诺详情视图
 struct PromiseDetailView: View {
-    @Bindable var promise: Promise
-    @Environment(\.modelContext) private var modelContext
+    let promise: Promise
     @Environment(\.dismiss) private var dismiss
-    @State private var showDeleteConfirm = false
+    @Environment(\.modelContext) private var modelContext
     
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    Toggle("已完成", isOn: $promise.isCompleted)
+            ScrollView {
+                VStack(alignment: .leading, spacing: ThemeManager.Spacing.lg) {
+                    // 承诺内容
+                    Text(promise.content)
+                        .font(ThemeManager.Typography.headline)
+                        .foregroundColor(ThemeManager.Colors.textPrimary)
                     
-                    if promise.isCompleted, let completedAt = promise.completedAt {
-                        LabeledContent("完成时间", value: completedAt.formatted())
-                    }
-                }
-                
-                Section("承诺内容") {
-                    Text(promise.title)
-                        .font(ThemeManager.Typography.body)
-                    
-                    if let notes = promise.notes {
-                        Text(notes)
-                            .font(ThemeManager.Typography.callout)
+                    // 状态
+                    HStack {
+                        Text("状态:")
                             .foregroundColor(ThemeManager.Colors.textSecondary)
+                        Text(promise.trackingStatus == "active" ? "进行中" : "已完成")
+                            .foregroundColor(promise.trackingStatus == "active" ? ThemeManager.Colors.accent : ThemeManager.Colors.secondary)
                     }
-                }
-                
-                Section("详情") {
-                    LabeledContent("截止日期", value: promise.dueDate.formatted())
+                    .font(ThemeManager.Typography.subheadline)
                     
-                    LabeledContent("优先级") {
-                        HStack {
-                            Circle()
-                                .fill(priorityColor)
-                                .frame(width: 8, height: 8)
-                            Text(priorityText)
+                    // 履约率
+                    if promise.fulfillmentRate > 0 {
+                        VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
+                            Text("履约率")
+                                .font(ThemeManager.Typography.subheadline)
+                                .foregroundColor(ThemeManager.Colors.textSecondary)
+                            
+                            ProgressView(value: promise.fulfillmentRate)
+                                .tint(ThemeManager.Colors.secondary)
+                            
+                            Text("\(Int(promise.fulfillmentRate * 100))%")
+                                .font(ThemeManager.Typography.caption)
+                                .foregroundColor(ThemeManager.Colors.secondary)
                         }
                     }
                     
-                    if let profile = promise.relatedProfile {
-                        LabeledContent("关联人物", value: profile.name)
+                    // 日期信息
+                    VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
+                        Text("作出承诺: \(formatDate(promise.committedAt))")
+                            .font(ThemeManager.Typography.caption)
+                            .foregroundColor(ThemeManager.Colors.textSecondary)
+                        
+                        if let deadline = promise.deadline {
+                            Text("截止日期: \(formatDate(deadline))")
+                                .font(ThemeManager.Typography.caption)
+                                .foregroundColor(ThemeManager.Colors.textSecondary)
+                        }
                     }
                     
-                    LabeledContent("创建时间", value: promise.createdAt.formatted())
+                    Spacer()
                 }
-                
-                Section {
-                    Button(role: .destructive) {
-                        showDeleteConfirm = true
-                    } label: {
-                        Label("删除承诺", systemImage: "trash")
-                    }
-                }
+                .padding(ThemeManager.Spacing.lg)
             }
+            .background(ThemeManager.Colors.background)
             .navigationTitle("承诺详情")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") { dismiss() }
                 }
             }
-            .alert("确认删除？", isPresented: $showDeleteConfirm) {
-                Button("取消", role: .cancel) {}
-                Button("删除", role: .destructive) {
-                    deletePromise()
-                }
-            } message: {
-                Text("此操作无法撤销")
-            }
         }
     }
     
-    private var priorityColor: Color {
-        switch promise.priority {
-        case 1: return .red
-        case 2: return .orange
-        default: return .green
-        }
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .long
+        return formatter.string(from: date)
     }
-    
-    private var priorityText: String {
-        switch promise.priority {
-        case 1: return "高"
-        case 2: return "中"
-        default: return "低"
-        }
-    }
-    
-    private func deletePromise() {
-        // 取消通知
-        NotificationService.shared.cancelPromiseReminder(promise)
-        
-        modelContext.delete(promise)
-        dismiss()
-    }
+}
+
+#Preview {
+    PromisesView()
+        .modelContainer(for: [Promise.self, Profile.self], inMemory: true)
 }
