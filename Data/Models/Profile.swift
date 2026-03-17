@@ -4,9 +4,9 @@ import Foundation
 // MARK: - 人物档案模型
 @Model
 final class Profile {
-    @Attribute(.unique) var id: UUID
-    @Attribute(.indexed) var name: String
-    @Attribute(.indexed) var relationshipType: String
+    var id: UUID
+    var name: String
+    var relationshipType: String
     var nickname: String?
     var avatar: String?
     var gender: String?
@@ -18,7 +18,7 @@ final class Profile {
     var interactionCount: Int
     var lastInteractionAt: Date?
     var createdAt: Date
-    @Attribute(.indexed) var updatedAt: Date
+    var updatedAt: Date
     
     // JSON存储字段
     var personalityData: Data?
