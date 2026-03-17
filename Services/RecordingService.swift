@@ -84,12 +84,19 @@ class ManualConflictRecordingService {
               let recognizer = speechRecognizer else { return }
         
         let request = SFSpeechURLRecognitionRequest(url: audioURL)
+        request.shouldReportPartialResults = false
         
-        do {
-            let result = try await recognizer.recognitionTask(with: request)
-            transcription = result.bestTranscription.formattedString
-        } catch {
-            self.error = .transcriptionFailed(error)
+        // 使用 withCheckedContinuation 处理回调
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            recognizer.recognitionTask(with: request) { result, error in
+                if let result = result, result.isFinal {
+                    self.transcription = result.bestTranscription.formattedString
+                }
+                if error != nil {
+                    self.error = .transcriptionFailed(error ?? NSError(domain: "RecordingService", code: -1))
+                }
+                continuation.resume()
+            }
         }
     }
     
