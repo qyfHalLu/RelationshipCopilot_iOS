@@ -13,7 +13,7 @@ struct AddProfileView: View {
     @Environment(\.modelContext) private var modelContext
     
     @State private var name: String = ""
-    @State private var relationship: RelationshipType = .partner
+    @State private var relationshipType: String = "partner"
     @State private var birthday: Date = Date()
     @State private var anniversary: Date = Date()
     @State private var notes: String = ""
@@ -26,11 +26,11 @@ struct AddProfileView: View {
     ]
     
     let colors: [Color] = [
-        Theme.Colors.primary,
-        Theme.Colors.accent1,
-        Theme.Colors.accent2,
-        Theme.Colors.accent3,
-        Theme.Colors.accent4,
+        ThemeManager.Colors.primary,
+        ThemeManager.Colors.accent1,
+        ThemeManager.Colors.accent2,
+        ThemeManager.Colors.accent3,
+        ThemeManager.Colors.accent4,
         Color(hex: "EF4444"),
         Color(hex: "F59E0B"),
         Color(hex: "10B981"),
@@ -43,7 +43,7 @@ struct AddProfileView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: Theme.Spacing.lg) {
+                VStack(spacing: ThemeManager.Spacing.lg) {
                     // Avatar selection
                     avatarSection
                     
@@ -58,10 +58,10 @@ struct AddProfileView: View {
                     
                     Spacer(minLength: 100)
                 }
-                .padding(.horizontal, Theme.Spacing.md)
-                .padding(.top, Theme.Spacing.md)
+                .padding(.horizontal, ThemeManager.Spacing.md)
+                .padding(.top, ThemeManager.Spacing.md)
             }
-            .background(Theme.Colors.background)
+            .background(ThemeManager.Colors.background)
             .navigationTitle("添加人物")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -69,7 +69,7 @@ struct AddProfileView: View {
                     Button("取消") {
                         dismiss()
                     }
-                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .foregroundStyle(ThemeManager.Colors.textSecondary)
                 }
                 
                 ToolbarItem(placement: .confirmationAction) {
@@ -86,7 +86,7 @@ struct AddProfileView: View {
     
     // MARK: - Avatar Section
     private var avatarSection: some View {
-        VStack(spacing: Theme.Spacing.md) {
+        VStack(spacing: ThemeManager.Spacing.md) {
             ZStack {
                 Circle()
                     .fill(colors[avatarColor].gradient)
@@ -100,9 +100,9 @@ struct AddProfileView: View {
             
             Text("选择头像颜色")
                 .font(.subheadline)
-                .foregroundStyle(Theme.Colors.secondaryText)
+                .foregroundStyle(ThemeManager.Colors.textSecondary)
             
-            LazyVGrid(columns: columns, spacing: Theme.Spacing.md) {
+            LazyVGrid(columns: columns, spacing: ThemeManager.Spacing.md) {
                 ForEach(0..<colors.count, id: \.self) { index in
                     Button {
                         withAnimation(.spring(response: 0.3)) {
@@ -123,117 +123,121 @@ struct AddProfileView: View {
                 }
             }
         }
-        .padding(Theme.Spacing.lg)
-        .background(Theme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.xl))
+        .padding(ThemeManager.Spacing.lg)
+        .background(ThemeManager.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.xl))
     }
     
     // MARK: - Basic Info Section
     private var basicInfoSection: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+        VStack(spacing: ThemeManager.Spacing.md) {
+            VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
                 Text("姓名")
                     .font(.subheadline)
                     .fontWeight(.medium)
-                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .foregroundStyle(ThemeManager.Colors.textSecondary)
                 
                 TextField("请输入姓名", text: $name)
                     .font(.body)
-                    .padding(Theme.Spacing.md)
-                    .background(Theme.Colors.background)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.md))
+                    .padding(ThemeManager.Spacing.md)
+                    .background(ThemeManager.Colors.background)
+                    .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
             }
         }
-        .padding(Theme.Spacing.lg)
-        .background(Theme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.xl))
+        .padding(ThemeManager.Spacing.lg)
+        .background(ThemeManager.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.xl))
     }
     
     // MARK: - Relationship Section
     private var relationshipSection: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+        VStack(spacing: ThemeManager.Spacing.md) {
+            VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
                 Text("关系类型")
                     .font(.subheadline)
                     .fontWeight(.medium)
-                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .foregroundStyle(ThemeManager.Colors.textSecondary)
                 
-                Picker("关系类型", selection: $relationship) {
-                    ForEach(RelationshipType.allCases, id: \.self) { type in
-                        Text(type.displayName).tag(type)
-                    }
+                Picker("关系类型", selection: $relationshipType) {
+                    Text("伴侣").tag("partner")
+                    Text("配偶").tag("spouse")
+                    Text("家人").tag("family")
+                    Text("朋友").tag("friend")
+                    Text("同事").tag("colleague")
+                    Text("其他").tag("other")
                 }
                 .pickerStyle(.menu)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(Theme.Spacing.md)
-                .background(Theme.Colors.background)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.md))
+                .padding(ThemeManager.Spacing.md)
+                .background(ThemeManager.Colors.background)
+                .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
             }
             
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
                 Text("生日")
                     .font(.subheadline)
                     .fontWeight(.medium)
-                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .foregroundStyle(ThemeManager.Colors.textSecondary)
                 
                 DatePicker("生日", selection: $birthday, displayedComponents: .date)
                     .datePickerStyle(.compact)
-                    .padding(Theme.Spacing.md)
-                    .background(Theme.Colors.background)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.md))
+                    .padding(ThemeManager.Spacing.md)
+                    .background(ThemeManager.Colors.background)
+                    .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
             }
             
-            if relationship == .partner || relationship == .spouse {
-                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            if relationshipType == "partner" || relationshipType == "spouse" {
+                VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
                     Text("纪念日")
                         .font(.subheadline)
                         .fontWeight(.medium)
-                        .foregroundStyle(Theme.Colors.secondaryText)
+                        .foregroundStyle(ThemeManager.Colors.textSecondary)
                     
                     DatePicker("纪念日", selection: $anniversary, displayedComponents: .date)
                         .datePickerStyle(.compact)
-                        .padding(Theme.Spacing.md)
-                        .background(Theme.Colors.background)
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.md))
+                        .padding(ThemeManager.Spacing.md)
+                        .background(ThemeManager.Colors.background)
+                        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
                 }
             }
         }
-        .padding(Theme.Spacing.lg)
-        .background(Theme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.xl))
+        .padding(ThemeManager.Spacing.lg)
+        .background(ThemeManager.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.xl))
     }
     
     // MARK: - Notes Section
     private var notesSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
             Text("备注")
                 .font(.subheadline)
                 .fontWeight(.medium)
-                .foregroundStyle(Theme.Colors.secondaryText)
+                .foregroundStyle(ThemeManager.Colors.textSecondary)
             
             TextEditor(text: $notes)
                 .font(.body)
                 .frame(minHeight: 100)
-                .padding(Theme.Spacing.sm)
-                .background(Theme.Colors.background)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.md))
+                .padding(ThemeManager.Spacing.sm)
+                .background(ThemeManager.Colors.background)
+                .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
                 .scrollContentBackground(.hidden)
         }
-        .padding(Theme.Spacing.lg)
-        .background(Theme.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.xl))
+        .padding(ThemeManager.Spacing.lg)
+        .background(ThemeManager.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.xl))
     }
     
     // MARK: - Actions
     private func saveProfile() {
         let profile = Profile(
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-            relationship: relationship,
-            birthday: birthday,
-            anniversary: relationship == .partner || relationship == .spouse ? anniversary : nil,
-            notes: notes.isEmpty ? nil : notes,
-            avatarColorIndex: avatarColor
+            relationshipType: relationshipType
         )
+        profile.birthday = birthday
+        if relationshipType == "partner" || relationshipType == "spouse" {
+            // Store anniversary in notes or create separate field
+        }
+        profile.notes = notes.isEmpty ? nil : notes
         
         modelContext.insert(profile)
         

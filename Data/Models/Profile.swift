@@ -79,3 +79,19 @@ struct Preferences: Codable {
     var loveLanguage: String?
     var communicationStyle: String?
 }
+
+// MARK: - 添加缺失字段
+extension Profile {
+    var healthScore: Int {
+        get { return 70 + (intimacyScore * 3) }
+        set { intimacyScore = newValue / 3 - 70 }
+    }
+    
+    var notes: String? {
+        get { return preferences?.communicationStyle }
+        set { 
+            if preferences == nil { preferences = Preferences() }
+            preferences?.communicationStyle = newValue
+        }
+    }
+}

@@ -32,25 +32,6 @@ enum AIServiceError: LocalizedError {
     }
 }
 
-/// 分析结果
-struct AnalysisResult: Codable {
-    let score: Int  // 0-100
-    let summary: String
-    let strengths: [String]
-    let improvements: [String]
-    let suggestions: [String]
-    let emotionalTrend: String
-    let communicationQuality: String
-    let nextReviewDate: Date
-}
-
-/// 情感趋势数据
-struct EmotionalTrend: Codable {
-    let date: Date
-    let score: Int
-    let event: String?
-}
-
 /// Chat消息
 struct ChatMessage: Codable {
     let role: String
@@ -154,9 +135,9 @@ final class AIService: ObservableObject {
         do {
             // 使用Kimi K2.5分析
             let result = try await performAIAnalysis(
-                conversationText: recording.transcript ?? "无文字记录",
+                conversationText: recording.transcription ?? "无文字记录",
                 profileName: profile.name,
-                relationshipType: profile.relationship.displayName
+                relationshipType: relationshipTypeText(profile.relationshipType)
             )
             usedToday += 1
             saveUsage()
@@ -184,13 +165,13 @@ final class AIService: ObservableObject {
         
         // 如果有历史记录，使用AI生成综合报告
         if !sessions.isEmpty {
-            let combinedText = sessions.prefix(5).compactMap { $0.transcript }.joined(separator: "\n---\n")
+            let combinedText = sessions.prefix(5).compactMap { $0.transcription }.joined(separator: "\n---\n")
             
             if !combinedText.isEmpty {
                 return try await performAIAnalysis(
                     conversationText: combinedText,
                     profileName: profile.name,
-                    relationshipType: profile.relationship.displayName
+                    relationshipType: relationshipTypeText(profile.relationshipType)
                 )
             }
         }
@@ -198,14 +179,11 @@ final class AIService: ObservableObject {
         // 没有足够数据时生成默认报告
         let avgScore = calculateAverageScore(from: sessions)
         return AnalysisResult(
-            score: avgScore,
+            emotionScore: Double(avgScore),
+            communicationPatterns: generateStrengths(profile: profile),
+            recommendations: generateSuggestions(profile: profile, score: avgScore),
             summary: generateSummary(score: avgScore, profile: profile),
-            strengths: generateStrengths(profile: profile),
-            improvements: generateImprovements(score: avgScore),
-            suggestions: generateSuggestions(profile: profile, score: avgScore),
-            emotionalTrend: analyzeEmotionalTrend(sessions: sessions),
-            communicationQuality: assessCommunicationQuality(sessions: sessions),
-            nextReviewDate: Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
+            keywords: generateImprovements(score: avgScore)
         )
     }
     
@@ -216,31 +194,31 @@ final class AIService: ObservableObject {
         let calendar = Calendar.current
         let now = Date()
         
-        switch profile.relationship {
-        case .partner, .spouse:
+        switch profile.relationshipType {
+        case "partner", "spouse":
             suggestions = [
                 "今天可以给对方一个惊喜，表达你的感激之情",
                 "一起回忆初次相遇的美好时光",
                 "尝试一起完成一个新活动，增加共同回忆"
             ]
-        case .family:
+        case "family":
             suggestions = [
                 "给家人打个电话，关心近况",
                 "分享一些生活中的趣事",
                 "一起用餐，增进感情"
             ]
-        case .friend:
+        case "friend":
             suggestions = [
                 "约出来喝杯咖啡聊聊近况",
                 "分享最近看到的有趣内容",
                 "在重要日子送上祝福"
             ]
-        case .colleague:
+        case "colleague":
             suggestions = [
                 "在工作中多给予支持和配合",
                 "适当表达感谢和认可"
             ]
-        case .other:
+        default:
             suggestions = ["保持真诚和尊重的沟通"]
         }
         
@@ -352,8 +330,26 @@ final class AIService: ObservableObject {
             throw AIServiceError.invalidResponse
         }
         
-        let decoder = JSONDecoder()
-        return try decoder.decode(AnalysisResult.self, from: data)
+        // 自定义解析，兼容不同字段名
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let score = json["score"] as? Int ?? 75
+            let summary = json["summary"] as? String ?? ""
+            let strengths = json["strengths"] as? [String] ?? []
+            let improvements = json["improvements"] as? [String] ?? []
+            let suggestions = json["suggestions"] as? [String] ?? []
+            let emotionalTrend = json["emotionalTrend"] as? String ?? "稳定"
+            let communicationQuality = json["communicationQuality"] as? String ?? "良好"
+            
+            return AnalysisResult(
+                emotionScore: Double(score),
+                communicationPatterns: strengths,
+                recommendations: suggestions,
+                summary: summary,
+                keywords: improvements
+            )
+        }
+        
+        throw AIServiceError.invalidResponse
     }
     
     // MARK: - Private Methods - 备用逻辑
@@ -361,42 +357,46 @@ final class AIService: ObservableObject {
     private func calculateAverageScore(from sessions: [RecordingSession]) -> Int {
         guard !sessions.isEmpty else { return 75 }
         
-        let total = sessions.reduce(0) { $0 + $1.analysisScore }
+        let total = sessions.reduce(0) { $0 + Int($1.analysisResult?.emotionScore ?? 75) }
         return min(100, max(0, total / sessions.count))
     }
     
-    private func generateSummary(score: Int, profile: Profile) -> String {
-        let relationshipWord: String
-        switch profile.relationship {
-        case .partner, .spouse: relationshipWord = "伴侣关系"
-        case .family: relationshipWord = "家庭关系"
-        case .friend: relationshipWord = "友谊"
-        case .colleague: relationshipWord = "同事关系"
-        case .other: relationshipWord = "关系"
+    private func relationshipTypeText(_ type: String) -> String {
+        switch type {
+        case "partner": return "伴侣"
+        case "spouse": return "配偶"
+        case "family": return "家人"
+        case "friend": return "朋友"
+        case "colleague": return "同事"
+        default: return "其他"
         }
+    }
+    
+    private func generateSummary(score: Int, profile: Profile) -> String {
+        let relationshipWord = relationshipTypeText(profile.relationshipType)
         
         if score >= 85 {
-            return "与\(profile.name)的\(relationshipWord)非常健康。"
+            return "与\(profile.name)的\(relationshipWord)关系非常健康。"
         } else if score >= 70 {
-            return "与\(profile.name)的\(relationshipWord)总体良好。"
+            return "与\(profile.name)的\(relationshipWord)关系总体良好。"
         } else if score >= 60 {
-            return "与\(profile.name)的\(relationshipWord)需要更多关注。"
+            return "与\(profile.name)的\(relationshipWord)关系需要更多关注。"
         } else {
-            return "与\(profile.name)的\(relationshipWord)需要改善。"
+            return "与\(profile.name)的\(relationshipWord)关系需要改善。"
         }
     }
     
     private func generateStrengths(profile: Profile) -> [String] {
-        switch profile.relationship {
-        case .partner, .spouse:
+        switch profile.relationshipType {
+        case "partner", "spouse":
             return ["相互尊重", "愿意付出", "沟通理性"]
-        case .family:
+        case "family":
             return ["天然信任", "相互支持"]
-        case .friend:
+        case "friend":
             return ["真诚相待", "志趣相投"]
-        case .colleague:
+        case "colleague":
             return ["专业配合", "相互尊重"]
-        case .other:
+        default:
             return ["保持真诚"]
         }
     }
@@ -416,29 +416,12 @@ final class AIService: ObservableObject {
             suggestions.append("安排一次深入交流，坦诚分享感受")
         }
         
-        if profile.relationship == .partner || profile.relationship == .spouse {
+        if profile.relationshipType == "partner" || profile.relationshipType == "spouse" {
             suggestions.append("可以一起看部电影或共进晚餐")
         }
         
         suggestions.append("在重要日子给予特别关注")
         return suggestions
-    }
-    
-    private func analyzeEmotionalTrend(sessions: [RecordingSession]) -> String {
-        guard sessions.count >= 2 else { return "数据不足" }
-        return "稳定"
-    }
-    
-    private func assessCommunicationQuality(sessions: [RecordingSession]) -> String {
-        guard !sessions.isEmpty else { return "暂无数据" }
-        let avgScore = calculateAverageScore(from: sessions)
-        switch avgScore {
-        case 90...100: return "卓越"
-        case 80..<90: return "优秀"
-        case 70..<80: return "良好"
-        case 60..<70: return "一般"
-        default: return "需要改善"
-        }
     }
     
     // MARK: - Quota Management
@@ -459,20 +442,5 @@ final class AIService: ObservableObject {
     private func saveUsage() {
         userDefaults.set(usedToday, forKey: usedKey)
         userDefaults.set(Date(), forKey: dateKey)
-    }
-}
-
-// MARK: - RelationshipType Extension
-
-extension RelationshipType {
-    var displayName: String {
-        switch self {
-        case .partner: return "伴侣"
-        case .spouse: return "配偶"
-        case .family: return "家人"
-        case .friend: return "朋友"
-        case .colleague: return "同事"
-        case .other: return "其他"
-        }
     }
 }
