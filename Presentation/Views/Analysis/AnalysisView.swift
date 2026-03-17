@@ -240,4 +240,24 @@ struct HistoryItem: View {
         }
     }
     
-    private var statusColor:
+    private var statusColor: Color {
+        switch session.status {
+        case "analyzed": return .green
+        case "completed": return .orange
+        default: return .blue
+        }
+    }
+    
+    private var formattedDate: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: session.createdAt)
+    }
+}
+
+// MARK: - 预览
+#Preview {
+    AnalysisView()
+        .modelContainer(for: [RecordingSession.self], inMemory: true)
+}

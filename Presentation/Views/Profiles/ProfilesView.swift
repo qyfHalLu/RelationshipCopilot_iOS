@@ -1,3 +1,10 @@
+//
+//  ProfilesView.swift
+//  RelationshipCopilot
+//
+//  人物关系管理视图
+//
+
 import SwiftUI
 import SwiftData
 
@@ -9,19 +16,27 @@ struct ProfilesView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: ThemeManager.Spacing.lg) {
-                    // 关系统计
+                    // 关系统统
                     RelationshipStatsCard(profileCount: profiles.count)
                     
                     // 人物列表
-                    LazyVStack(spacing: ThemeManager.Spacing.md) {
-                        ForEach(profiles) { profile in
-                            NavigationLink(value: profile) {
-                                ProfileCard(profile: profile)
+                    if profiles.isEmpty {
+                        EmptyStateView(
+                            icon: "person.2.slash",
+                            title: "还没有人物",
+                            subtitle: "添加第一个重要的人吧"
+                        )
+                    } else {
+                        LazyVStack(spacing: ThemeManager.Spacing.md) {
+                            ForEach(profiles) { profile in
+                                NavigationLink(value: profile) {
+                                    ProfileCard(profile: profile)
+                                }
                             }
                         }
-                    }
-                    .navigationDestination(for: Profile.self) { profile in
-                        ProfileDetailView(profile: profile)
+                        .navigationDestination(for: Profile.self) { profile in
+                            ProfileDetailView(profile: profile)
+                        }
                     }
                     
                     // 添加按钮
@@ -68,6 +83,7 @@ struct RelationshipStatsCard: View {
             )
             
             Divider()
+                .frame(height: 40)
             
             StatItem(
                 icon: "heart.fill",
@@ -77,6 +93,7 @@ struct RelationshipStatsCard: View {
             )
             
             Divider()
+                .frame(height: 40)
             
             StatItem(
                 icon: "checkmark.circle.fill",
@@ -87,8 +104,8 @@ struct RelationshipStatsCard: View {
         }
         .padding(ThemeManager.Spacing.lg)
         .background(Color.white)
-        .cornerRadius(ThemeManager.Radius.lg)
-        .shadow(ThemeManager.Shadows.md)
+        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.lg))
+        .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 2)
         .opacity(isAnimating ? 1 : 0)
         .offset(y: isAnimating ? 0 : 20)
         .onAppear {
@@ -182,20 +199,24 @@ struct ProfileCard: View {
             }
             .padding(ThemeManager.Spacing.md)
             .background(Color.white)
-            .cornerRadius(ThemeManager.Radius.lg)
-            .shadow(ThemeManager.Shadows.sm)
+            .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.lg))
+            .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
             .scaleEffect(isPressed ? 0.98 : 1.0)
         }
         .buttonStyle(PlainButtonStyle())
-        .pressEvents {
-            withAnimation(.easeInOut(duration: 0.1)) {
-                isPressed = true
-            }
-        } onRelease: {
-            withAnimation(.easeInOut(duration: 0.1)) {
-                isPressed = false
-            }
-        }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    withAnimation(.easeInOut(duration: 0.1)) {
+                        isPressed = true
+                    }
+                }
+                .onEnded { _ in
+                    withAnimation(.easeInOut(duration: 0.1)) {
+                        isPressed = false
+                    }
+                }
+        )
     }
     
     private var initials: String {
@@ -218,7 +239,6 @@ struct ProfileCard: View {
     }
     
     private var healthScore: Int {
-        // 模拟健康度计算
         return 70 + (profile.intimacyScore * 3)
     }
     
@@ -235,7 +255,49 @@ struct ProfileCard: View {
 // MARK: - 添加人物按钮
 struct AddProfileButton: View {
     let action: () -> Void
-    @State private var isHovered = false
     
     var body: some View {
-        Button(action: action
+        Button(action: action) {
+            HStack {
+                Image(systemName: "plus.circle.fill")
+                Text("添加人物")
+            }
+            .font(ThemeManager.Typography.headline)
+            .foregroundColor(.white)
+            .frame(maxWidth: .infinity)
+            .padding(ThemeManager.Spacing.md)
+            .background(ThemeManager.Colors.primary)
+            .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.lg))
+        }
+    }
+}
+
+// MARK: - 空状态视图
+struct EmptyStateView: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    
+    var body: some View {
+        VStack(spacing: ThemeManager.Spacing.lg) {
+            Image(systemName: icon)
+                .font(.system(size: 64))
+                .foregroundColor(ThemeManager.Colors.border)
+            
+            Text(title)
+                .font(ThemeManager.Typography.title3)
+                .foregroundColor(ThemeManager.Colors.textPrimary)
+            
+            Text(subtitle)
+                .font(ThemeManager.Typography.callout)
+                .foregroundColor(ThemeManager.Colors.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.top, 60)
+    }
+}
+
+#Preview {
+    ProfilesView()
+        .modelContainer(for: [Profile.self, Promise.self, RecordingSession.self], inMemory: true)
+}

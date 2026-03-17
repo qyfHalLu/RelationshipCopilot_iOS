@@ -1,5 +1,55 @@
-green(initValue: Double(healthScore)), in: 0...100, step: 1)
+//
+//  ProfileDetailView.swift
+//  RelationshipCopilot
+//
+//  人物详情/编辑视图
+//
+
+import SwiftUI
+import SwiftData
+
+struct ProfileDetailView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    
+    let profile: Profile
+    
+    @State private var name: String = ""
+    @State private var relationshipType: String = ""
+    @State private var healthScore: Int = 75
+    @State private var notes: String = ""
+    @State private var showError: Bool = false
+    
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("基本信息") {
+                    TextField("姓名", text: $name)
+                    
+                    Picker("关系类型", selection: $relationshipType) {
+                        Text("伴侣").tag("partner")
+                        Text("配偶").tag("spouse")
+                        Text("家人").tag("family")
+                        Text("朋友").tag("friend")
+                        Text("同事").tag("colleague")
+                        Text("其他").tag("other")
                     }
+                }
+                
+                Section("健康度") {
+                    HStack {
+                        Text("关系健康度")
+                        Spacer()
+                        Text("\(healthScore)")
+                            .foregroundStyle(healthColor)
+                            .fontWeight(.bold)
+                    }
+                    
+                    Slider(value: Binding(
+                        get: { Double(healthScore) },
+                        set: { healthScore = Int($0) }
+                    ), in: 0...100, step: 1)
+                    .tint(healthColor)
                 }
                 
                 Section("备注") {
@@ -23,6 +73,12 @@ green(initValue: Double(healthScore)), in: 0...100, step: 1)
             }
             .alert("请输入姓名", isPresented: $showError) {
                 Button("确定", role: .cancel) {}
+            }
+            .onAppear {
+                name = profile.name
+                relationshipType = profile.relationshipType
+                healthScore = profile.healthScore
+                notes = profile.notes ?? ""
             }
         }
     }
@@ -75,4 +131,11 @@ struct EmptyStateView: View {
         }
         .padding(.top, 60)
     }
+}
+
+#Preview {
+    NavigationStack {
+        ProfileDetailView(profile: Profile(name: "测试", relationshipType: "partner"))
+    }
+    .modelContainer(for: [Profile.self, Promise.self, RecordingSession.self], inMemory: true)
 }
