@@ -1,10 +1,10 @@
 import SwiftUI
 
 // MARK: - 主题管理器
-@Observable
-class ThemeManager {
-    var colorScheme: ColorScheme = .light
-    var accentColor: Color = .blue
+// 使用静态结构体，因为主题配置不需要动态状态
+enum ThemeManager {
+    static var colorScheme: ColorScheme = .light
+    static var accentColor: Color = .blue
     
     // 颜色系统
     struct Colors {

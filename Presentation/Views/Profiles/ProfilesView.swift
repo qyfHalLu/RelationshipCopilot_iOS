@@ -2,7 +2,6 @@ import SwiftUI
 import SwiftData
 
 struct ProfilesView: View {
-    @Environment(ThemeManager.self) private var theme
     @Query(sort: \Profile.updatedAt, order: .reverse) private var profiles: [Profile]
     @State private var showAddProfile = false
     

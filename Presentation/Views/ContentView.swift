@@ -3,7 +3,6 @@ import SwiftData
 
 struct ContentView: View {
     @Environment(AuthenticationService.self) private var authService
-    @Environment(ThemeManager.self) private var theme
     
     var body: some View {
         Group {
@@ -20,7 +19,6 @@ struct ContentView: View {
 // MARK: - 主标签页
 struct MainTabView: View {
     @State private var selectedTab = 0
-    @Environment(ThemeManager.self) private var theme
     
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -60,7 +58,6 @@ struct MainTabView: View {
 
 // MARK: - 首页视图
 struct HomeView: View {
-    @Environment(ThemeManager.self) private var theme
     @Query private var profiles: [Profile]
     
     var body: some View {

@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @Environment(ThemeManager.self) private var theme
     @Environment(AuthenticationService.self) private var authService
     @State private var showLogoutAlert = false
     

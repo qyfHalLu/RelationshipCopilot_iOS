@@ -2,7 +2,6 @@ import SwiftUI
 import AVFoundation
 
 struct RecordingView: View {
-    @Environment(ThemeManager.self) private var theme
     @State private var viewModel = RecordingViewModel()
     
     var body: some View {
@@ -310,7 +309,6 @@ struct RecordingControls: View {
 // MARK: - 分析结果视图
 struct AnalysisResultView: View {
     let transcription: String
-    @Environment(ThemeManager.self) private var theme
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {

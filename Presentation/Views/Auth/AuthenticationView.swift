@@ -3,7 +3,6 @@ import LocalAuthentication
 
 struct AuthenticationView: View {
     @Environment(AuthenticationService.self) private var authService
-    @Environment(ThemeManager.self) private var theme
     @State private var phoneNumber = ""
     @State private var verificationCode = ""
     @State private var showVerification = false

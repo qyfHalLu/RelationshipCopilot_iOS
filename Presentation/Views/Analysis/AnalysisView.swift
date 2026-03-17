@@ -2,7 +2,6 @@ import SwiftUI
 import SwiftData
 
 struct AnalysisView: View {
-    @Environment(ThemeManager.self) private var theme
     @Query(sort: \RecordingSession.createdAt, order: .reverse) private var sessions: [RecordingSession]
     
     var body: some View {
