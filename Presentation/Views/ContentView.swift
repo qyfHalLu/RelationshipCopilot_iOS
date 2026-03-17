@@ -65,7 +65,7 @@ struct MainTabView: View {
 // MARK: - 首页视图
 struct HomeView: View {
     @Query private var profiles: [Profile]
-    @Query(sort: \Promise.dueDate, order: .forward) private var promises: [Promise]
+    @Query(sort: \Promise.committedAt, order: .reverse) private var promises: [Promise]
     @Query(sort: \RecordingSession.createdAt, order: .reverse) private var sessions: [RecordingSession]
     
     var averageHealthScore: Int {
@@ -75,15 +75,13 @@ struct HomeView: View {
     }
     
     var streakDays: Int {
-        // 简化计算：有承诺完成就算连续
-        let completedToday = promises.filter { 
-            $0.isCompleted && Calendar.current.isDateInToday($0.completedAt ?? Date.distantPast)
-        }.count
-        return completedToday > 0 ? 15 : 0 // 简化逻辑
+        // 简化计算：基于履约率
+        let completedCount = promises.filter { $0.fulfillmentRate > 0.5 }.count
+        return min(completedCount, 30)
     }
     
     var pendingPromises: [Promise] {
-        promises.filter { !$0.isCompleted && !$0.isOverdue }
+        promises.filter { $0.trackingStatus == "active" }
     }
     
     var body: some View {
@@ -100,7 +98,7 @@ struct HomeView: View {
                     RecentActivitySection()
                     
                     // 待办提醒
-                    TodoSection()
+                    TodoSection(pendingPromises: pendingPromises)
                 }
                 .padding(.horizontal, ThemeManager.Spacing.md)
                 .padding(.vertical, ThemeManager.Spacing.lg)
@@ -138,7 +136,7 @@ struct HealthScoreCard: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(Color.orange.opacity(0.1))
-                .cornerRadius(ThemeManager.Radius.full)
+                .clipShape(Capsule())
             }
             
             HStack(alignment: .lastTextBaseline, spacing: 8) {
@@ -180,8 +178,8 @@ struct HealthScoreCard: View {
         }
         .padding(ThemeManager.Spacing.lg)
         .background(Color.white)
-        .cornerRadius(ThemeManager.Radius.lg)
-        .shadow(ThemeManager.Shadows.md)
+        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.lg))
+        .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 2)
         .onAppear {
             withAnimation(.easeOut(duration: 0.5)) {
                 isAnimating = true
@@ -259,20 +257,24 @@ struct QuickActionButton: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(ThemeManager.Spacing.md)
             .background(Color.white)
-            .cornerRadius(ThemeManager.Radius.md)
-            .shadow(ThemeManager.Shadows.sm)
+            .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
+            .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
             .scaleEffect(isPressed ? 0.96 : 1.0)
         }
         .buttonStyle(ScaleButtonStyle())
-        .pressEvents {
-            withAnimation(.easeInOut(duration: 0.1)) {
-                isPressed = true
-            }
-        } onRelease: {
-            withAnimation(.easeInOut(duration: 0.1)) {
-                isPressed = false
-            }
-        }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    withAnimation(.easeInOut(duration: 0.1)) {
+                        isPressed = true
+                    }
+                }
+                .onEnded { _ in
+                    withAnimation(.easeInOut(duration: 0.1)) {
+                        isPressed = false
+                    }
+                }
+        )
     }
 }
 
@@ -320,7 +322,7 @@ struct ActivityItem: View {
                 .foregroundColor(.white)
                 .frame(width: 44, height: 44)
                 .background(color)
-                .cornerRadius(ThemeManager.Radius.md)
+                .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
             
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
@@ -340,14 +342,14 @@ struct ActivityItem: View {
         }
         .padding(ThemeManager.Spacing.md)
         .background(Color.white)
-        .cornerRadius(ThemeManager.Radius.md)
-        .shadow(ThemeManager.Shadows.sm)
+        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
+        .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
     }
 }
 
 // MARK: - 待办提醒
 struct TodoSection: View {
-    @Query(filter: #Predicate<Promise> { !$0.isCompleted }) private var pendingPromises: [Promise]
+    let pendingPromises: [Promise]
     
     var body: some View {
         VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
@@ -376,8 +378,8 @@ struct TodoSection: View {
                 }
                 .padding(ThemeManager.Spacing.md)
                 .background(Color.white)
-                .cornerRadius(ThemeManager.Radius.md)
-                .shadow(ThemeManager.Shadows.sm)
+                .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
+                .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
             } else {
                 // 显示待办
                 HStack(spacing: ThemeManager.Spacing.md) {
@@ -405,8 +407,8 @@ struct TodoSection: View {
                 }
                 .padding(ThemeManager.Spacing.md)
                 .background(Color.white)
-                .cornerRadius(ThemeManager.Radius.md)
-                .shadow(ThemeManager.Shadows.sm)
+                .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
+                .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
             }
         }
     }
@@ -416,26 +418,5 @@ struct TodoSection: View {
 struct ScaleButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-    }
-}
-
-// MARK: - 按压事件修饰符
-struct PressEventsModifier: ViewModifier {
-    var onPress: () -> Void
-    var onRelease: () -> Void
-    
-    func body(content: Content) -> some View {
-        content
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in onPress() }
-                    .onEnded { _ in onRelease() }
-            )
-    }
-}
-
-extension View {
-    func pressEvents(onPress: @escaping () -> Void, onRelease: @escaping () -> Void) -> some View {
-        modifier(PressEventsModifier(onPress: onPress, onRelease: onRelease))
     }
 }
