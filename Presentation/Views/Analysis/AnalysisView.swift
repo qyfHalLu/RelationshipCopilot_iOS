@@ -59,8 +59,8 @@ struct AnalysisOverviewCard: View {
         }
         .padding(ThemeManager.Spacing.lg)
         .background(Color.white)
-        .cornerRadius(ThemeManager.Radius.lg)
-        .shadow(ThemeManager.Shadows.md)
+        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.lg))
+        .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 2)
         .opacity(isAnimating ? 1 : 0)
         .offset(y: isAnimating ? 0 : 20)
         .onAppear {
@@ -138,15 +138,14 @@ struct EmptyHistoryView: View {
         .frame(maxWidth: .infinity)
         .padding(ThemeManager.Spacing.xl)
         .background(Color.white)
-        .cornerRadius(ThemeManager.Radius.lg)
-        .shadow(ThemeManager.Shadows.sm)
+        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.lg))
+        .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
     }
 }
 
 // MARK: - 历史项
 struct HistoryItem: View {
     let session: RecordingSession
-    @State private var isPressed = false } })
     
     var body: some View {
         Button(action: {
@@ -184,7 +183,7 @@ struct HistoryItem: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(statusColor.opacity(0.1))
-                    .cornerRadius(ThemeManager.Radius.full)
+                    .clipShape(Capsule())
                 
                 Image(systemName: "chevron.right")
                     .font(.caption)
@@ -192,20 +191,10 @@ struct HistoryItem: View {
             }
             .padding(ThemeManager.Spacing.md)
             .background(Color.white)
-            .cornerRadius(ThemeManager.Radius.lg)
-            .shadow(ThemeManager.Shadows.sm)
-            .scaleEffect(isPressed ? 0.98 : 1.0)
+            .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.lg))
+            .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
         }
         .buttonStyle(PlainButtonStyle())
-        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { _ in
-            withAnimation(.easeInOut(duration: 0.1)) {
-                isPressed = true
-            }
-        }.onEnded { _ in
-            withAnimation(.easeInOut(duration: 0.1)) {
-                isPressed = false } })
-            }
-        }
     }
     
     private var iconName: String {
@@ -256,7 +245,6 @@ struct HistoryItem: View {
     }
 }
 
-// MARK: - 预览
 #Preview {
     AnalysisView()
         .modelContainer(for: [RecordingSession.self], inMemory: true)
