@@ -122,6 +122,14 @@ struct AuthenticationView: View {
                                 .font(ThemeManager.Typography.caption)
                                 .foregroundColor(ThemeManager.Colors.primary)
                         }
+                    
+                    // 跳过登录 - 仅用于测试
+                    Button("跳过登录") {
+                        authService.login(phone: "test_user")
+                    }
+                    .font(ThemeManager.Typography.caption)
+                    .foregroundColor(ThemeManager.Colors.textSecondary)
+                    .padding(.top, ThemeManager.Spacing.md)
                     }
                     .padding(.bottom, ThemeManager.Spacing.lg)
                 }
