@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - 快速工具视图
 struct QuickToolsView: View {

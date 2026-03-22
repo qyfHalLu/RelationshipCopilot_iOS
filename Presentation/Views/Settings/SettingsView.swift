@@ -79,14 +79,15 @@ struct UserSection: View {
 
 // MARK: - 通用设置
 struct GeneralSection: View {
-    @AppStorage("darkMode") private var darkMode = false
     @AppStorage("hapticFeedback") private var hapticFeedback = true
     
     var body: some View {
         Section("通用") {
-            Toggle(isOn: $darkMode) {
+            Toggle(isOn: .constant(true)) {
                 Label("深色模式", systemImage: "moon.fill")
             }
+            .disabled(true)
+            .foregroundColor(ThemeManager.Colors.textSecondary)
             
             Toggle(isOn: $hapticFeedback) {
                 Label("触觉反馈", systemImage: "hand.tap.fill")
