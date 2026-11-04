@@ -264,7 +264,7 @@ struct SettingsView: View {
             } header: {
                 Text("内测：访问令牌")
             } footer: {
-                Text("内测期间由开发者提供。令牌写入钥匙串，保存后需重启 App 生效。")
+                Text("内测期间由开发者提供。令牌写入钥匙串，保存后立即生效，无需重启。")
             }
         }
     }
@@ -278,7 +278,12 @@ struct SettingsView: View {
                 value: trimmed
             )
             proxyTokenDraft = ""
-            proxyTokenStatus = "已保存。重启 App 后生效。"
+            // 文案必须与 `AIService.proxyToken` 的实际读法一致。
+            //
+            // 它曾是 `let`（只在 init 读一次），那时「重启后生效」是**真话**；
+            // 改成 computed property 之后，下一次请求就会重读钥匙串 ——
+            // 再留着「需重启」就会让用户白重启一次，还会怀疑令牌没存进去。
+            proxyTokenStatus = "已保存，立即生效。"
         } catch {
             proxyTokenStatus = "保存失败：\(error.localizedDescription)"
         }

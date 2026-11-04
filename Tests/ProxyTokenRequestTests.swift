@@ -188,4 +188,117 @@ final class ProxyTokenRequestTests: XCTestCase {
             "Bearer sk-direct"
         )
     }
+
+    // MARK: - 文案与实现的一致性
+
+    /// 设置页那句状态文案，必须和 `proxyToken` 的真实读法一致。
+    ///
+    /// ## 为什么这条测试值得存在
+    ///
+    /// `proxyToken` 原本是 `let`（只在 `init` 读一次），那时「需重启 App 生效」
+    /// 是**真话**。把它改成 computed property 之后，那句文案就变成了假话 ——
+    /// 用户会为一个根本不需要的重启而重启，然后怀疑令牌没存进去。
+    ///
+    /// 这类不一致编译器不会报、UI 测试也抓不到（它只是文字），
+    /// 而且它偏偏出现在**修好 bug 之后**：改了实现却忘了改文案。
+    /// 所以这里直接读源码，把两者的口径焊在一起。
+    ///
+    /// ## 为什么必须只扫「代理令牌」这一段
+    ///
+    /// 第一版扫的是整个文件，结果报红 —— 但那是**误报**：
+    /// 直连密钥区块（`debugKeySection`）里「保存后需重启才会重新解析接入方式」
+    /// 是**真话**，因为 `EndpointConfiguration.resolve()` 确实在启动时解析模式。
+    /// 把不同功能的口径混在一个断言里，只会逼着后来人去改正确的文案。
+    /// 断言的作用域必须和它描述的行为一样窄。
+    func testBetaTokenCopyMatchesTokenReadBehaviour() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // Tests/
+            .deletingLastPathComponent()   // 仓库根
+        let settings = try String(
+            contentsOf: root.appendingPathComponent("Presentation/Views/Settings/SettingsView.swift"),
+            encoding: .utf8
+        )
+        let aiService = try String(
+            contentsOf: root.appendingPathComponent("Services/AIService.swift"),
+            encoding: .utf8
+        )
+
+        // 前提校验：先确认 `proxyToken` 确实是每次重读，否则下面的断言没有意义。
+        // 若哪天有人把它改回缓存，这条会先报红，提示"文案该改回去了"。
+        let isComputed = aiService.contains("private var proxyToken: String?")
+            || aiService.contains("var proxyToken: String? {")
+        XCTAssertTrue(
+            isComputed,
+            "proxyToken 不再是 computed property。若改回 init 缓存，设置页文案必须恢复成「需重启生效」。"
+        )
+
+        // 只取代理令牌这一段的源码。
+        let section = try XCTUnwrap(
+            Self.block(named: "betaProxyTokenSection", in: settings),
+            "找不到 betaProxyTokenSection —— 若已改名，请同步更新本测试"
+        )
+
+        // 只看**用户能看到的字符串字面量**，跳过注释。
+        //
+        // 这个断言前后错了三次，每次都是同一个毛病：拿"文件里有没有某个词"
+        // 当代理指标，而那个词的分布范围比它想描述的行为宽得多。
+        //   ① 扫全文件 → 命中直连密钥区块里**正确**的「重启生效」；
+        //   ② 只看区块 → 命中我自己写的解释性注释；
+        //   ③ 用 `contains("重启")` → 命中正确的「无需重启」。
+        // 结论：断言必须落在**同一语义层**上。这里要管的是用户读到的文字，
+        // 那就只取 `Text("...")` 里的字面量，注释和标识符都不该进来。
+        let visibleCopy = Self.stringLiterals(in: section)
+
+        // 前提校验：确认真的取到了文案，否则下面的"没发现问题"毫无意义。
+        XCTAssertFalse(
+            visibleCopy.isEmpty,
+            "没有从代理令牌区块里提取到任何文案 —— 提取逻辑失效时不该静默通过"
+        )
+
+        // 「无需重启」是正确表述，先剔除再判断有没有叫人去重启。
+        let withoutNegations = visibleCopy
+            .replacingOccurrences(of: "无需重启", with: "")
+            .replacingOccurrences(of: "不用重启", with: "")
+
+        XCTAssertFalse(
+            withoutNegations.contains("重启"),
+            "代理令牌区块仍在要求用户重启，但 proxyToken 已是每次请求重读 —— 这句文案现在是假话"
+        )
+    }
+
+    /// 取出源码里所有 `"..."` 形式的字符串字面量，拼成一段。
+    ///
+    /// 只服务于本文件的源码级断言，不需要处理转义与插值 ——
+    /// 真要处理那些，就该换个更正经的解析方式，而不是加正则。
+    private static func stringLiterals(in source: String) -> String {
+        var literals: [String] = []
+        var current: String?
+        var iterator = source.makeIterator()
+        var pending: Character?
+
+        while let ch = pending ?? iterator.next() {
+            pending = nil
+            if ch == "\"" {
+                if let open = current {
+                    literals.append(open)
+                    current = nil
+                } else {
+                    current = ""
+                }
+                continue
+            }
+            if current != nil { current?.append(ch) }
+        }
+        return literals.joined(separator: "\n")
+    }
+
+    /// 从源码里截出 `private var <name>` 到下一个 `// MARK:` 之间的内容。
+    private static func block(named name: String, in source: String) -> String? {
+        guard let start = source.range(of: "private var \(name)") else { return nil }
+        let rest = source[start.lowerBound...]
+        if let end = rest.range(of: "// MARK:", range: rest.index(start.lowerBound, offsetBy: 1)..<rest.endIndex) {
+            return String(rest[..<end.lowerBound])
+        }
+        return String(rest)
+    }
 }
