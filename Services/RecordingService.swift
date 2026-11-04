@@ -89,6 +89,28 @@ final class RecordingService {
     /// 单次录音时长上限（30 分钟）。避免无限增长与后台被系统回收后的数据丢失。
     static let maxDuration: TimeInterval = 30 * 60
 
+    /// 「允许蓝牙耳机麦克风」的 category option。
+    ///
+    /// ## 为什么要包一层而不是直接写 `.allowBluetoothHFP`
+    ///
+    /// 这个名字在 iOS 26 SDK 里才出现 —— 它其实是把 `.allowBluetooth`
+    /// **改名**了（底层都是 `AVAudioSessionCategoryOptionAllowBluetooth`，值 `0x4`）。
+    ///
+    /// 直接写新名字的后果：本机 Xcode 27.2 编译通过，而 CI 的 Xcode 16.4
+    /// 直接报 `has no member 'allowBluetoothHFP'`，构建失败。
+    /// 这类"只在新 SDK 上能编"的写法没有任何本地提示 —— 只有当 CI 或
+    /// 别人用旧 Xcode 打开时才会炸。
+    ///
+    /// 用 `#if compiler(>=6.2)` 区分：新 SDK 用新名字（无废弃警告），
+    /// 旧 SDK 退回旧名字（有废弃警告但能编）。比只留一个名字更稳。
+    private static var bluetoothRecordingOption: AVAudioSession.CategoryOptions {
+        #if compiler(>=6.2)
+        return .allowBluetoothHFP
+        #else
+        return .allowBluetooth
+        #endif
+    }
+
     init() {
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))
     }
@@ -135,7 +157,11 @@ final class RecordingService {
 
         // 1) 音频会话：录音 + 允许蓝牙耳机（伴侣对话常戴耳机/免提）
         do {
-            try audioSession.setCategory(.record, mode: .measurement, options: [.allowBluetoothHFP])
+            try audioSession.setCategory(
+                .record,
+                mode: .measurement,
+                options: [Self.bluetoothRecordingOption]
+            )
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
             state = .idle
