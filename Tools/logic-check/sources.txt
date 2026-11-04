@@ -1,0 +1,32 @@
+# logic-check 的编译文件清单
+#
+# 每一行是一个 .swift 路径，由 CI 与本地脚本共同读取。
+#
+# 维护规则：
+#   · Core/ 下新增的、能独立编译的文件必须登记到这里
+#   · CI 的「Verify logic-check file list is complete」步骤会校验这一点，
+#     漏登记会让 CI 失败，而不是静默少测一块
+#   · 不能独立编译的文件（依赖 App/Services 层）在 CI 的 EXCLUDED 里排除并注明原因
+#
+# 为什么不用通配符 `Core/*.swift`：`EndpointConfiguration.swift` 引用了
+# Services 层的 `SecureStorageService`，通配会把整个编译打断。
+
+Core/AppError.swift
+Core/AppLog.swift
+Core/AppFormatters.swift
+Core/AIResponseParser.swift
+Core/FulfillmentStats.swift
+Core/IntimacyScale.swift
+Core/QuotaPolicy.swift
+Core/RateLimiter.swift
+Core/RelationshipType.swift
+Core/Validation.swift
+Core/Telemetry.swift
+Core/SafetyScreen.swift
+Core/DisputeCaseState.swift
+Core/DisputeTestimony.swift
+Core/DisputeVerdict.swift
+Core/DisputeVerdictParser.swift
+Core/DisputePrompt.swift
+Core/DisputeEvaluation.swift
+Core/GuidedRepair.swift

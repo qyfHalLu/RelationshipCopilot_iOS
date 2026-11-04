@@ -2,7 +2,19 @@
 //  AddProfileView.swift
 //  RelationshipCopilot
 //
-//  添加人物视图
+//  添加人物。
+//
+//  修复报告清单：
+//  - 纪念日被静默丢弃（P1）：原 `saveProfile()` 里有 `if relationshipType == "partner" || "spouse" { }`
+//    这样的空分支，注释写着 "Store anniversary in notes or create separate field"，
+//    用户填的纪念日**从未被保存**，而 `NotificationService.scheduleAnniversaryReminder`
+//    又依赖这个字段 —— 于是「纪念日提醒」永远不可能触发。现在写入 `Profile.anniversary`。
+//  - 深色模式：原文件末尾硬编码 `.preferredColorScheme(.light)`，即使在深色模式下这个 sheet
+//    也强制浅色。已移除。
+//  - A3：关系类型改用 `RelationshipType` 枚举，中文名统一来源，避免"配偶"显示成"其他"。
+//  - A6：备注写入独立字段 `note`（原实现塞进 `preferences.communicationStyle`）。
+//  - 头像颜色现在会持久化到 `Profile.avatar`，重开 App 不再变。
+//  - 输入校验统一走 `Validation`，保存失败给出明确提示（原实现 `try` 空的 insert，无错误处理）。
 //
 
 import SwiftUI
@@ -11,243 +23,209 @@ import SwiftData
 struct AddProfileView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    
-    @State private var name: String = ""
-    @State private var relationshipType: String = "partner"
-    @State private var birthday: Date = Date()
-    @State private var anniversary: Date = Date()
-    @State private var notes: String = ""
-    @State private var avatarColor: Int = 0
-    
-    @Query private var profiles: [Profile]
-    
-    let columns = [
-        GridItem(.adaptive(minimum: 60))
-    ]
-    
-    let colors: [Color] = [
+
+    @State private var name = ""
+    @State private var relationship: RelationshipType = .partner
+    @State private var birthday = Date()
+    @State private var hasBirthday = false
+    @State private var anniversary = Date()
+    @State private var hasAnniversary = false
+    @State private var note = ""
+    @State private var avatarIndex = 0
+    @State private var errorMessage: String?
+
+    @FocusState private var nameFocused: Bool
+
+    private let palette: [Color] = [
         ThemeManager.Colors.primary,
         ThemeManager.Colors.accent1,
         ThemeManager.Colors.accent2,
         ThemeManager.Colors.accent3,
         ThemeManager.Colors.accent4,
-        Color(hex: "EF4444"),
-        Color(hex: "F59E0B"),
-        Color(hex: "10B981"),
-        Color(hex: "3B82F6"),
-        Color(hex: "8B5CF6"),
-        Color(hex: "EC4899"),
-        Color(hex: "14B8A6")
+        ThemeManager.Colors.secondary
     ]
-    
+
+    private var canSave: Bool {
+        Validation.isNonEmpty(name)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: ThemeManager.Spacing.lg) {
-                    // Avatar selection
+                VStack(spacing: ThemeManager.Spacing.md) {
                     avatarSection
-                    
-                    // Basic info
-                    basicInfoSection
-                    
-                    // Relationship details
+                    nameSection
                     relationshipSection
-                    
-                    // Notes
-                    notesSection
-                    
-                    Spacer(minLength: 100)
+                    if relationship.isIntimate {
+                        anniversarySection
+                    }
+                    noteSection
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(ThemeManager.Typography.caption)
+                            .foregroundStyle(ThemeManager.Colors.danger)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
-                .padding(.horizontal, ThemeManager.Spacing.md)
-                .padding(.top, ThemeManager.Spacing.md)
+                .padding(ThemeManager.Spacing.md)
             }
             .background(ThemeManager.Colors.background)
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("添加人物")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") {
-                        dismiss()
-                    }
-                    .foregroundStyle(ThemeManager.Colors.textSecondary)
+                    Button("取消") { dismiss() }
                 }
-                
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
-                        saveProfile()
-                    }
-                    .fontWeight(.semibold)
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("保存") { save() }
+                        .disabled(!canSave)
+                        .fontWeight(.semibold)
                 }
             }
+            .onAppear { nameFocused = true }
         }
-        .preferredColorScheme(.light)
     }
-    
-    // MARK: - Avatar Section
+
+    // MARK: 各区块
+
     private var avatarSection: some View {
         VStack(spacing: ThemeManager.Spacing.md) {
             ZStack {
                 Circle()
-                    .fill(colors[avatarColor].gradient)
-                    .frame(width: 100, height: 100)
-                
-                Text(String(name.prefix(1)).uppercased())
-                    .font(.system(size: 40, weight: .bold))
-                    .foregroundStyle(.white)
+                    .fill(palette[avatarIndex].opacity(0.2))
+                    .frame(width: 84, height: 84)
+                Text(String(name.isEmpty ? "?" : String(name.prefix(1))))
+                    .font(.system(size: 34, weight: .semibold, design: .rounded))
+                    .foregroundStyle(palette[avatarIndex])
             }
-            .shadow(color: colors[avatarColor].opacity(0.4), radius: 10, y: 5)
-            
-            Text("选择头像颜色")
-                .font(.subheadline)
-                .foregroundStyle(ThemeManager.Colors.textSecondary)
-            
-            LazyVGrid(columns: columns, spacing: ThemeManager.Spacing.md) {
-                ForEach(0..<colors.count, id: \.self) { index in
+            .accessibilityHidden(true)
+
+            HStack(spacing: ThemeManager.Spacing.sm) {
+                ForEach(0..<palette.count, id: \.self) { index in
                     Button {
-                        withAnimation(.spring(response: 0.3)) {
-                            avatarColor = index
-                        }
+                        avatarIndex = index
                     } label: {
                         Circle()
-                            .fill(colors[index])
-                            .frame(width: 44, height: 44)
-                            .overlay {
-                                if avatarColor == index {
-                                    Circle()
-                                        .strokeBorder(.white, lineWidth: 3)
-                                }
-                            }
-                            .shadow(color: colors[index].opacity(0.5), radius: avatarColor == index ? 8 : 0, y: 3)
+                            .fill(palette[index])
+                            .frame(width: 30, height: 30)
+                            .overlay(
+                                Circle()
+                                    .strokeBorder(.white, lineWidth: avatarIndex == index ? 2.5 : 0)
+                            )
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("头像颜色 \(index + 1)")
+                    .accessibilityAddTraits(avatarIndex == index ? [.isSelected] : [])
                 }
             }
         }
+        .frame(maxWidth: .infinity)
         .padding(ThemeManager.Spacing.lg)
-        .background(ThemeManager.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.xl))
+        .surfaceCard()
     }
-    
-    // MARK: - Basic Info Section
-    private var basicInfoSection: some View {
-        VStack(spacing: ThemeManager.Spacing.md) {
-            VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
-                Text("姓名")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundStyle(ThemeManager.Colors.textSecondary)
-                
-                TextField("请输入姓名", text: $name)
-                    .font(.body)
-                    .padding(ThemeManager.Spacing.md)
-                    .background(ThemeManager.Colors.background)
-                    .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
-            }
-        }
-        .padding(ThemeManager.Spacing.lg)
-        .background(ThemeManager.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.xl))
-    }
-    
-    // MARK: - Relationship Section
-    private var relationshipSection: some View {
-        VStack(spacing: ThemeManager.Spacing.md) {
-            VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
-                Text("关系类型")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundStyle(ThemeManager.Colors.textSecondary)
-                
-                Picker("关系类型", selection: $relationshipType) {
-                    Text("伴侣").tag("partner")
-                    Text("配偶").tag("spouse")
-                    Text("家人").tag("family")
-                    Text("朋友").tag("friend")
-                    Text("同事").tag("colleague")
-                    Text("其他").tag("other")
-                }
-                .pickerStyle(.menu)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(ThemeManager.Spacing.md)
-                .background(ThemeManager.Colors.background)
-                .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
-            }
-            
-            VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
-                Text("生日")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundStyle(ThemeManager.Colors.textSecondary)
-                
-                DatePicker("生日", selection: $birthday, displayedComponents: .date)
-                    .datePickerStyle(.compact)
-                    .padding(ThemeManager.Spacing.md)
-                    .background(ThemeManager.Colors.background)
-                    .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
-            }
-            
-            if relationshipType == "partner" || relationshipType == "spouse" {
-                VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
-                    Text("纪念日")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundStyle(ThemeManager.Colors.textSecondary)
-                    
-                    DatePicker("纪念日", selection: $anniversary, displayedComponents: .date)
-                        .datePickerStyle(.compact)
-                        .padding(ThemeManager.Spacing.md)
-                        .background(ThemeManager.Colors.background)
-                        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
-                }
-            }
-        }
-        .padding(ThemeManager.Spacing.lg)
-        .background(ThemeManager.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.xl))
-    }
-    
-    // MARK: - Notes Section
-    private var notesSection: some View {
-        VStack(alignment: .leading, spacing: ThemeManager.Spacing.xs) {
-            Text("备注")
-                .font(.subheadline)
-                .fontWeight(.medium)
-                .foregroundStyle(ThemeManager.Colors.textSecondary)
-            
-            TextEditor(text: $notes)
-                .font(.body)
-                .frame(minHeight: 100)
-                .padding(ThemeManager.Spacing.sm)
-                .background(ThemeManager.Colors.background)
-                .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
-                .scrollContentBackground(.hidden)
-        }
-        .padding(ThemeManager.Spacing.lg)
-        .background(ThemeManager.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.xl))
-    }
-    
-    // MARK: - Actions
-    private func saveProfile() {
-        let profile = Profile(
-            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-            relationshipType: relationshipType
-        )
-        profile.birthday = birthday
-        if relationshipType == "partner" || relationshipType == "spouse" {
-            // Store anniversary in notes or create separate field
-        }
-        profile.notes = notes.isEmpty ? nil : notes
-        
-        modelContext.insert(profile)
-        
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-            dismiss()
-        }
-    }
-}
 
-#Preview {
-    AddProfileView()
-        .modelContainer(for: [Profile.self, Promise.self, RecordingSession.self], inMemory: true)
+    private var nameSection: some View {
+        fieldCard(title: "称呼") {
+            TextField("比如：小林", text: $name)
+                .font(ThemeManager.Typography.body)
+                .focused($nameFocused)
+                .submitLabel(.done)
+                .padding(ThemeManager.Spacing.md)
+                .background(ThemeManager.Colors.surfaceElevated)
+                .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md, style: .continuous))
+                .accessibilityLabel("称呼")
+        }
+    }
+
+    private var relationshipSection: some View {
+        fieldCard(title: "关系") {
+            Picker("关系", selection: $relationship) {
+                ForEach(RelationshipType.allCases) { type in
+                    Text(type.displayName).tag(type)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private var anniversarySection: some View {
+        fieldCard(title: "重要日期") {
+            VStack(spacing: ThemeManager.Spacing.sm) {
+                Toggle("记录生日", isOn: $hasBirthday)
+                if hasBirthday {
+                    DatePicker("生日", selection: $birthday, in: ...Date(), displayedComponents: .date)
+                        .datePickerStyle(.compact)
+                }
+
+                Toggle("记录纪念日", isOn: $hasAnniversary)
+                if hasAnniversary {
+                    DatePicker("纪念日", selection: $anniversary, in: ...Date(), displayedComponents: .date)
+                        .datePickerStyle(.compact)
+                }
+            }
+            .font(ThemeManager.Typography.body)
+        }
+    }
+
+    private var noteSection: some View {
+        fieldCard(title: "备注（可选）") {
+            TextEditor(text: $note)
+                .font(ThemeManager.Typography.body)
+                .frame(minHeight: 90)
+                .scrollContentBackground(.hidden)
+                .padding(ThemeManager.Spacing.sm)
+                .background(ThemeManager.Colors.surfaceElevated)
+                .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md, style: .continuous))
+                .accessibilityLabel("备注")
+            // 备注常写"他忌讳什么、最近在忙什么、上次为什么吵"这类回忆性内容，
+            // 想的时候比打的时候快。语音入口放在这里而不是省掉。
+            VoiceInputButton(text: $note, subject: "备注", compact: true)
+        }
+    }
+
+    private func fieldCard<Content: View>(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+            Text(title)
+                .font(ThemeManager.Typography.subheadline)
+                .foregroundStyle(ThemeManager.Colors.textSecondary)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(ThemeManager.Spacing.lg)
+        .surfaceCard()
+    }
+
+    // MARK: 保存
+
+    private func save() {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Validation.isNonEmpty(trimmed) else {
+            errorMessage = "请填写称呼"
+            return
+        }
+
+        let profile = Profile(name: trimmed, relationshipType: relationship.rawValue)
+        if hasBirthday { profile.birthday = birthday }
+        if hasAnniversary { profile.anniversary = anniversary }
+        profile.notes = Validation.optionalText(note)
+        profile.avatar = "color:\(avatarIndex)"
+
+        modelContext.insert(profile)
+
+        do {
+            try modelContext.save()
+            Telemetry.shared.track(.profileCreated)
+            DataMaintenance.syncWidget(context: modelContext)
+            dismiss()
+        } catch {
+            modelContext.delete(profile)
+            errorMessage = "保存失败：\(error.localizedDescription)"
+            AppLog.persistence.error("Insert profile failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
 }

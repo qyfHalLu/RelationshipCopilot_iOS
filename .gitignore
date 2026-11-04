@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# XcodeGen 产物（由 project.yml 生成，不入库）
+*.xcodeproj/
+*.xcworkspace/
+
+# 依赖
+.swiftpm/
+Pods/
+Carthage/Build/
+
+# 密钥与本地配置（绝不入库）
+Secrets.xcconfig
+**/Secrets.xcconfig
+*.local.xcconfig
+.env
+*.p8
+*.p12
+
+# 本地校验产物
+/tmp/

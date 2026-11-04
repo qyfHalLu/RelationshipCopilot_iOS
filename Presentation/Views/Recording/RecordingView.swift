@@ -1,563 +1,681 @@
 import SwiftUI
+import SwiftData
 import AVFoundation
+
+// MARK: - 记录对话
+//
+// 修复报告 A2 / B1–B5 / C6 / D2 / D5 —— 这是本仓库问题最集中的页面：
+//
+//  原实现（`RecordingView.swift:522-538`）：
+//    `stopRecording()` → 固定 `sleep(2s)` → 把 `transcription` 赋成硬编码字符串
+//    「这是模拟的对话转录内容」→ 直接弹出 `AnalysisResultView`（内含硬编码的 65/45 分）。
+//    也就是说：**录了音，但音频从未被用于分析；AI 服务从未被调用**。
+//
+//  现在：
+//    1. 录音用 `RecordingService`（AVAudioEngine 流式识别，支持后台与长音频）。
+//    2. 停止后拿**真实转写文本**调用 `AIService.analyze`（协议注入，可测）。
+//    3. 结果与转写一起落 SwiftData（`RecordingSession`），历史可回看 —— 此前
+//       `RecordingSession(` 全仓库 0 次实例化，分析页永远为空。
+//    4. 音频在分析完成后删除，只留文字（隐私）。
+//    5. 无转写时明确失败，不编造结果；AI 未配置时明确提示。
+//    6. 录音前引导选择关联人物，使分析有上下文。
 
 struct RecordingView: View {
     @State private var viewModel = RecordingViewModel()
-    
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                ThemeManager.Colors.background.ignoresSafeArea()
-                
-                VStack(spacing: 0) {
-                    // 顶部提示
-                    if viewModel.recordingState == .idle {
-                        RecordingTipCard()
-                    }
-                    
-                    Spacer()
-                    
-                    // 录音状态显示
-                    RecordingStatusView(viewModel: viewModel)
-                    
-                    Spacer()
-                    
-                    // 录音控制按钮
-                    RecordingControls(viewModel: viewModel)
-                        .padding(.bottom, 40)
-                }
-            }
-            .navigationTitle("记录对话")
-            .navigationBarTitleDisplayMode(.large)
-        }
-        .alert("需要权限", isPresented: $viewModel.showPermissionAlert) {
-            Button("去设置") {
-                viewModel.openSettings()
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("需要麦克风权限来录制对话。请在设置中开启权限。")
-        }
-        .sheet(isPresented: $viewModel.showAnalysisSheet) {
-            AnalysisResultView(transcription: viewModel.transcription)
-        }
-    }
-}
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.openURL) private var openURL
 
-// MARK: - 录音提示卡片
-struct RecordingTipCard: View {
-    @State private var isVisible = false
-    
-    var body: some View {
-        HStack(spacing: ThemeManager.Spacing.md) {
-            Image(systemName: "info.circle.fill")
-                .font(.title3)
-                .foregroundColor(ThemeManager.Colors.primary)
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text("录音说明")
-                    .font(ThemeManager.Typography.subheadline)
-                    .foregroundColor(ThemeManager.Colors.textPrimary)
-                
-                Text("点击下方按钮开始录音，录音仅用于生成分析报告，不会自动上传。")
-                    .font(ThemeManager.Typography.caption)
-                    .foregroundColor(ThemeManager.Colors.textSecondary)
-                    .lineLimit(2)
-            }
-            
-            Spacer()
-        }
-        .padding(ThemeManager.Spacing.md)
-        .background(Color.white)
-        .cornerRadius(ThemeManager.Radius.md)
-        .shadow(ThemeManager.Shadows.sm)
-        .padding(.horizontal, ThemeManager.Spacing.md)
-        .padding(.top, ThemeManager.Spacing.md)
-        .opacity(isVisible ? 1 : 0)
-        .offset(y: isVisible ? 0 : -20)
-        .onAppear {
-            withAnimation(.easeOut(duration: 0.5)) {
-                isVisible = true
-            }
-        }
-    }
-}
-
-// MARK: - 录音状态视图
-struct RecordingStatusView: View {
-    @Bindable var viewModel: RecordingViewModel
-    @State private var pulseAnimation = false
-    
-    var body: some View {
-        VStack(spacing: ThemeManager.Spacing.xl) {
-            // 波形动画
-            ZStack {
-                // 外圈脉冲
-                if viewModel.recordingState == .recording {
-                    Circle()
-                        .stroke(ThemeManager.Colors.primary.opacity(0.3), lineWidth: 2)
-                        .frame(width: 200, height: 200)
-                        .scaleEffect(pulseAnimation ? 1.2 : 1.0)
-                        .opacity(pulseAnimation ? 0 : 1)
-                        .animation(
-                            .easeInOut(duration: 1.5).repeatForever(autoreverses: false),
-                            value: pulseAnimation
-                        )
-                }
-                
-                // 内圈
-                Circle()
-                    .fill(viewModel.recordingState == .recording ? ThemeManager.Colors.primary.opacity(0.1) : Color.white)
-                    .frame(width: 160, height: 160)
-                    .shadow(ThemeManager.Shadows.lg)
-                
-                // 麦克风图标或波形
-                if viewModel.recordingState == .recording {
-                    AudioWaveformView()
-                        .frame(width: 80, height: 60)
-                } else {
-                    Image(systemName: "mic.fill")
-                        .font(.system(size: 48))
-                        .foregroundColor(viewModel.recordingState == .recording ? ThemeManager.Colors.primary : ThemeManager.Colors.textSecondary)
-                }
-            }
-            .onAppear {
-                if viewModel.recordingState == .recording {
-                    pulseAnimation = true
-                }
-            }
-            
-            // 时长显示
-            if viewModel.recordingState == .recording {
-                Text(viewModel.formattedDuration)
-                    .font(.system(size: 48, weight: .medium, design: .monospaced))
-                    .foregroundColor(ThemeManager.Colors.textPrimary)
-                    .transition(.scale.combined(with: .opacity))
-            } else if viewModel.recordingState == .analyzing {
-                AnalyzingView()
-            } else {
-                Text("点击开始录音")
-                    .font(ThemeManager.Typography.title3)
-                    .foregroundColor(ThemeManager.Colors.textSecondary)
-            }
-            
-            // 状态提示
-            if viewModel.recordingState == .recording {
-                Text("正在录音...")
-                    .font(ThemeManager.Typography.subheadline)
-                    .foregroundColor(ThemeManager.Colors.primary)
-            }
-        }
-    }
-}
-
-// MARK: - 音频波形视图
-struct AudioWaveformView: View {
-    @State private var phase = 0.0
-    let bars = 7
-    
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<bars, id: \.self) { index in
-                AudioBar(index: index, phase: phase)
-            }
-        }
-        .onAppear {
-            withAnimation(.linear(duration: 0.1).repeatForever(autoreverses: false)) {
-                phase += .pi * 2
-            }
-        }
-    }
-}
-
-// MARK: - 音频条
-struct AudioBar: View {
-    let index: Int
-    let phase: Double
-    
-    var body: some View {
-        RoundedRectangle(cornerRadius: 2)
-            .fill(ThemeManager.Colors.primary)
-            .frame(width: 6, height: height)
-            .animation(.easeInOut(duration: 0.3), value: phase)
-    }
-    
-    private var height: CGFloat {
-        let baseHeight: CGFloat = 20
-        let variance = sin(phase + Double(index) * 0.5) * 15
-        return max(8, baseHeight + variance)
-    }
-}
-
-// MARK: - 分析中视图
-struct AnalyzingView: View {
-    @State private var rotation = 0.0
-    
-    var body: some View {
-        VStack(spacing: ThemeManager.Spacing.md) {
-            ZStack {
-                Circle()
-                    .stroke(ThemeManager.Colors.border, lineWidth: 4)
-                    .frame(width: 60, height: 60)
-                
-                Circle()
-                    .trim(from: 0, to: 0.7)
-                    .stroke(ThemeManager.Colors.primary, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                    .frame(width: 60, height: 60)
-                    .rotationEffect(.degrees(rotation))
-            }
-            
-            Text("AI分析中...")
-                .font(ThemeManager.Typography.subheadline)
-                .foregroundColor(ThemeManager.Colors.textSecondary)
-        }
-        .onAppear {
-            withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
-                rotation = 360
-            }
-        }
-    }
-}
-
-// MARK: - 录音控制按钮
-struct RecordingControls: View {
-    @Bindable var viewModel: RecordingViewModel
-    @State private var buttonScale = 1.0
-    
-    var body: some View {
-        HStack(spacing: ThemeManager.Spacing.xl) {
-            // 取消按钮（仅在录音中显示）
-            if viewModel.recordingState == .recording {
-                Button(action: {
-                    viewModel.cancelRecording()
-                }) {
-                    Image(systemName: "xmark")
-                        .font(.title2)
-                        .foregroundColor(ThemeManager.Colors.textSecondary)
-                        .frame(width: 60, height: 60)
-                        .background(Color.white)
-                        .clipShape(Circle())
-                        .shadow(ThemeManager.Shadows.md)
-                }
-                .transition(.scale.combined(with: .opacity))
-            }
-            
-            // 主按钮
-            Button(action: {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
-                    buttonScale = 0.9
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    buttonScale = 1.0
-                }
-                
-                switch viewModel.recordingState {
-                case .idle:
-                    viewModel.startRecording()
-                case .recording:
-                    viewModel.stopRecording()
-                case .analyzing:
-                    break
-                }
-            }) {
-                ZStack {
-                    Circle()
-                        .fill(buttonColor)
-                        .frame(width: 80, height: 80)
-                        .shadow(ThemeManager.Shadows.lg)
-                    
-                    Image(systemName: buttonIcon)
-                        .font(.system(size: 32))
-                        .foregroundColor(.white)
-                }
-            }
-            .scaleEffect(buttonScale)
-            .disabled(viewModel.recordingState == .analyzing)
-            
-            // 占位（保持对称）
-            if viewModel.recordingState == .recording {
-                Color.clear
-                    .frame(width: 60, height: 60)
-                    .transition(.scale.combined(with: .opacity))
-            }
-        }
-    }
-    
-    private var buttonColor: Color {
-        switch viewModel.recordingState {
-        case .idle:
-            return ThemeManager.Colors.primary
-        case .recording:
-            return ThemeManager.Colors.danger
-        case .analyzing:
-            return ThemeManager.Colors.textSecondary
-        }
-    }
-    
-    private var buttonIcon: String {
-        switch viewModel.recordingState {
-        case .idle:
-            return "mic.fill"
-        case .recording:
-            return "stop.fill"
-        case .analyzing:
-            return "hourglass"
-        }
-    }
-}
-
-// MARK: - 分析结果视图
-struct AnalysisResultView: View {
-    let transcription: String
-    @Environment(\.dismiss) private var dismiss
-    
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: ThemeManager.Spacing.lg) {
-                    // 情绪分析卡片
-                    EmotionAnalysisCard()
-                    
-                    // 沟通建议卡片
-                    CommunicationAdviceCard()
-                    
-                    // 转录文本
-                    TranscriptionCard(text: transcription)
+                    profileSelector
+
+                    recordingStage
+
+                    if viewModel.phase == .recording || viewModel.phase == .paused {
+                        liveTranscript
+                    }
+
+                    if let error = viewModel.error, error.isBlocking {
+                        errorCard(error)
+                    }
+
+                    controls
+
+                    consentNote
                 }
-                .padding(ThemeManager.Spacing.md)
+                .padding(.horizontal, ThemeManager.Spacing.md)
+                .padding(.vertical, ThemeManager.Spacing.lg)
             }
             .background(ThemeManager.Colors.background)
-            .navigationTitle("分析结果")
+            .navigationTitle("记录对话")
             .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") {
-                        dismiss()
-                    }
+            .scrollDismissesKeyboard(.immediately)
+            .onAppear { viewModel.onAppear(context: modelContext) }
+            .alert("需要权限", isPresented: $viewModel.showPermissionAlert) {
+                Button("去设置") { openSettings() }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text(viewModel.permissionMessage)
+            }
+            .sheet(item: $viewModel.completedSession) { session in
+                NavigationStack {
+                    SessionDetailView(session: session, showsDismiss: true)
                 }
             }
         }
     }
-}
 
-// MARK: - 情绪分析卡片
-struct EmotionAnalysisCard: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
-            Text("情绪分析")
-                .font(ThemeManager.Typography.title3)
-                .foregroundColor(ThemeManager.Colors.textPrimary)
-            
-            HStack(spacing: ThemeManager.Spacing.lg) {
-                EmotionIndicator(
-                    label: "你的情绪",
-                    score: 65,
-                    color: .blue
-                )
-                
-                EmotionIndicator(
-                    label: "对方情绪",
-                    score: 45,
-                    color: .orange
-                )
-            }
-            
-            Text("双方情绪存在差异，建议先平复情绪再沟通")
+    // MARK: 选择关联人物
+
+    private var profileSelector: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+            Text("这次记录关于")
                 .font(ThemeManager.Typography.subheadline)
-                .foregroundColor(ThemeManager.Colors.textSecondary)
-        }
-        .padding(ThemeManager.Spacing.lg)
-        .background(Color.white)
-        .cornerRadius(ThemeManager.Radius.lg)
-        .shadow(ThemeManager.Shadows.md)
-    }
-}
+                .foregroundStyle(ThemeManager.Colors.textSecondary)
 
-// MARK: - 情绪指示器
-struct EmotionIndicator: View {
-    let label: String
-    let score: Int
-    let color: Color
-    
-    var body: some View {
-        VStack(spacing: ThemeManager.Spacing.sm) {
-            Text(label)
-                .font(ThemeManager.Typography.caption)
-                .foregroundColor(ThemeManager.Colors.textSecondary)
-            
-            Text("\(score)")
-                .font(.system(size: 36, weight: .bold, design: .rounded))
-                .foregroundColor(color)
-            
-            // 进度条
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(ThemeManager.Colors.border)
-                        .frame(height: 4)
-                    
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(color)
-                        .frame(width: geometry.size.width * CGFloat(score) / 100, height: 4)
+            if viewModel.profiles.isEmpty {
+                HStack(spacing: ThemeManager.Spacing.sm) {
+                    Image(systemName: "person.badge.plus")
+                        .foregroundStyle(ThemeManager.Colors.accent)
+                    Text("还没有人物档案，请先到「关系」里添加一个人")
+                        .font(ThemeManager.Typography.callout)
+                        .foregroundStyle(ThemeManager.Colors.textPrimary)
+                }
+                .padding(ThemeManager.Spacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .surfaceCard(cornerRadius: ThemeManager.Radius.md)
+            } else {
+                Menu {
+                    ForEach(viewModel.profiles) { profile in
+                        Button {
+                            viewModel.selectedProfile = profile
+                        } label: {
+                            if viewModel.selectedProfile?.id == profile.id {
+                                Label(profile.name, systemImage: "checkmark")
+                            } else {
+                                Text(profile.name)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "person.fill")
+                            .foregroundStyle(ThemeManager.Colors.primary)
+                        Text(viewModel.selectedProfile?.name ?? "请选择")
+                            .font(ThemeManager.Typography.body)
+                            .foregroundStyle(ThemeManager.Colors.textPrimary)
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(ThemeManager.Typography.caption)
+                            .foregroundStyle(ThemeManager.Colors.textSecondary)
+                    }
+                    .padding(ThemeManager.Spacing.md)
+                    .surfaceCard(cornerRadius: ThemeManager.Radius.md)
+                }
+                .disabled(viewModel.phase == .recording || viewModel.phase == .analyzing)
+            }
+        }
+    }
+
+    // MARK: 录音可视化
+
+    private var recordingStage: some View {
+        VStack(spacing: ThemeManager.Spacing.md) {
+            ZStack {
+                if viewModel.phase == .recording {
+                    Circle()
+                        .fill(ThemeManager.Colors.danger.opacity(0.08))
+                        .frame(width: 180, height: 180)
+                }
+
+                Circle()
+                    .fill(ThemeManager.Colors.surfaceElevated)
+                    .frame(width: 150, height: 150)
+
+                if viewModel.phase == .recording {
+                    WaveformIndicator(isActive: true)
+                } else if viewModel.phase == .analyzing {
+                    VStack(spacing: ThemeManager.Spacing.sm) {
+                        ProgressView()
+                        Text("分析中")
+                            .font(ThemeManager.Typography.caption)
+                            .foregroundStyle(ThemeManager.Colors.textSecondary)
+                    }
+                } else {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 44))
+                        .foregroundStyle(ThemeManager.Colors.textSecondary)
                 }
             }
-            .frame(height: 4)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(recordingAccessibilityLabel)
+
+            Text(AppFormatters.duration(viewModel.elapsed))
+                .font(ThemeManager.Typography.timer)
+                .foregroundStyle(ThemeManager.Colors.textPrimary)
+                .monospacedDigit()
+                .contentTransition(.numericText())
+
+            Text(viewModel.statusText)
+                .font(ThemeManager.Typography.subheadline)
+                .foregroundStyle(ThemeManager.Colors.textSecondary)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
     }
-}
 
-// MARK: - 沟通建议卡片
-struct CommunicationAdviceCard: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
-            Text("沟通建议")
-                .font(ThemeManager.Typography.title3)
-                .foregroundColor(ThemeManager.Colors.textPrimary)
-            
-            VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
-                AdviceItem(
-                    icon: "1.circle.fill",
-                    text: "使用'我感到...'句式表达感受，避免指责"
-                )
-                
-                AdviceItem(
-                    icon: "2.circle.fill",
-                    text: "给对方表达的机会，认真倾听"
-                )
-                
-                AdviceItem(
-                    icon: "3.circle.fill",
-                    text: "寻找双方都能接受的解决方案"
-                )
+    private var recordingAccessibilityLabel: String {
+        switch viewModel.phase {
+        case .idle:      return "准备录音"
+        case .recording: return "正在录音，已录 \(Int(viewModel.elapsed)) 秒"
+        case .paused:    return "录音已暂停"
+        case .analyzing: return "正在分析"
+        case .finished:  return "录音结束"
+        }
+    }
+
+    // MARK: 实时转写
+
+    private var liveTranscript: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+            Text("实时转写")
+                .font(ThemeManager.Typography.caption)
+                .foregroundStyle(ThemeManager.Colors.textSecondary)
+
+            ScrollView {
+                Text(viewModel.liveTranscription.isEmpty ? "正在聆听…" : viewModel.liveTranscription)
+                    .font(ThemeManager.Typography.callout)
+                    .foregroundStyle(viewModel.liveTranscription.isEmpty
+                                     ? ThemeManager.Colors.textSecondary
+                                     : ThemeManager.Colors.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 120)
+        }
+        .padding(ThemeManager.Spacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .surfaceCard(cornerRadius: ThemeManager.Radius.md)
+    }
+
+    // MARK: 控制
+
+    private var controls: some View {
+        HStack(spacing: ThemeManager.Spacing.xl) {
+            if viewModel.phase == .recording || viewModel.phase == .paused {
+                Button {
+                    viewModel.cancel()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.title3)
+                        .foregroundStyle(ThemeManager.Colors.textSecondary)
+                        .frame(width: 56, height: 56)
+                        .background(ThemeManager.Colors.surfaceElevated)
+                        .clipShape(Circle())
+                }
+                .accessibilityLabel("取消录音")
+            }
+
+            Button {
+                viewModel.primaryAction()
+            } label: {
+                ZStack {
+                    Circle()
+                        .fill(buttonColor)
+                        .frame(width: 76, height: 76)
+                    Image(systemName: buttonIcon)
+                        .font(.system(size: 30))
+                        .foregroundStyle(.white)
+                }
+            }
+            .buttonStyle(PressableStyle(scale: 0.94))
+            .disabled(!viewModel.canTapPrimary)
+            .accessibilityLabel(viewModel.primaryActionLabel)
+
+            if viewModel.phase == .recording || viewModel.phase == .paused {
+                Button {
+                    viewModel.togglePause()
+                } label: {
+                    Image(systemName: viewModel.phase == .paused ? "play.fill" : "pause.fill")
+                        .font(.title3)
+                        .foregroundStyle(ThemeManager.Colors.textPrimary)
+                        .frame(width: 56, height: 56)
+                        .background(ThemeManager.Colors.surfaceElevated)
+                        .clipShape(Circle())
+                }
+                .accessibilityLabel(viewModel.phase == .paused ? "继续录音" : "暂停录音")
             }
         }
-        .padding(ThemeManager.Spacing.lg)
-        .background(Color.white)
-        .cornerRadius(ThemeManager.Radius.lg)
-        .shadow(ThemeManager.Shadows.md)
+        .frame(maxWidth: .infinity)
     }
-}
 
-// MARK: - 建议项
-struct AdviceItem: View {
-    let icon: String
-    let text: String
-    
-    var body: some View {
-        HStack(spacing: ThemeManager.Spacing.sm) {
-            Image(systemName: icon)
-                .foregroundColor(ThemeManager.Colors.primary)
-            
-            Text(text)
-                .font(ThemeManager.Typography.subheadline)
-                .foregroundColor(ThemeManager.Colors.textPrimary)
+    private var buttonColor: Color {
+        switch viewModel.phase {
+        case .idle, .finished: return ThemeManager.Colors.primary
+        case .recording, .paused: return ThemeManager.Colors.danger
+        case .analyzing: return ThemeManager.Colors.textSecondary
         }
     }
-}
 
-// MARK: - 转录文本卡片
-struct TranscriptionCard: View {
-    let text: String
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
-            Text("对话记录")
-                .font(ThemeManager.Typography.title3)
-                .foregroundColor(ThemeManager.Colors.textPrimary)
-            
-            Text(text.isEmpty ? "暂无转录内容" : text)
-                .font(ThemeManager.Typography.body)
-                .foregroundColor(ThemeManager.Colors.textSecondary)
-                .lineLimit(nil)
+    private var buttonIcon: String {
+        switch viewModel.phase {
+        case .idle, .finished: return "mic.fill"
+        case .recording, .paused: return "stop.fill"
+        case .analyzing: return "hourglass"
         }
-        .padding(ThemeManager.Spacing.lg)
+    }
+
+    // MARK: 隐私说明与错误
+
+    private var consentNote: some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+            Label("录音前请取得对方同意", systemImage: "hand.raised")
+                .font(ThemeManager.Typography.caption)
+                .foregroundStyle(ThemeManager.Colors.textPrimary)
+
+            Text("音频只保存在本机，分析完成后立即删除，仅保留文字。使用 AI 分析时，转写出的文字会发送到分析服务。")
+                .font(ThemeManager.Typography.caption)
+                .foregroundStyle(ThemeManager.Colors.textSecondary)
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white)
-        .cornerRadius(ThemeManager.Radius.lg)
-        .shadow(ThemeManager.Shadows.md)
+        .padding(ThemeManager.Spacing.md)
+        .background(ThemeManager.Colors.surfaceElevated)
+        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md, style: .continuous))
+    }
+
+    private func errorCard(_ error: AppError) -> some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+            Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+                .font(ThemeManager.Typography.subheadline)
+                .foregroundStyle(ThemeManager.Colors.danger)
+
+            HStack(spacing: ThemeManager.Spacing.md) {
+                switch error.recovery {
+                case .openSettings:
+                    Button("去设置") { openSettings() }
+                case .retry:
+                    Button("重试") { viewModel.retry() }
+                case .upgrade:
+                    Text("可明天再试，或在设置里查看剩余次数")
+                        .font(ThemeManager.Typography.caption)
+                        .foregroundStyle(ThemeManager.Colors.textSecondary)
+                case .reenter, .dismiss, .none:
+                    EmptyView()
+                }
+                Spacer()
+                Button("忽略") { viewModel.error = nil }
+                    .foregroundStyle(ThemeManager.Colors.textSecondary)
+            }
+            .font(ThemeManager.Typography.subheadline)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(ThemeManager.Spacing.md)
+        .background(ThemeManager.Colors.danger.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md, style: .continuous))
+    }
+
+    private func openSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        openURL(url)
     }
 }
 
-// MARK: - 录音视图模型
+// MARK: - 波形
+
+struct WaveformIndicator: View {
+    let isActive: Bool
+    @State private var phase: Double = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<5, id: \.self) { index in
+                Capsule()
+                    .fill(ThemeManager.Colors.primary)
+                    .frame(width: 6, height: barHeight(index))
+            }
+        }
+        .onAppear {
+            guard isActive, !reduceMotion else { return }
+            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: true)) {
+                phase = 1
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func barHeight(_ index: Int) -> CGFloat {
+        let base: CGFloat = 14
+        let amplitude: CGFloat = 18
+        let offset = sin(Double(index) * 0.9 + phase * .pi * 2)
+        return base + amplitude * CGFloat((offset + 1) / 2)
+    }
+}
+
+// MARK: - 视图模型
+
+@MainActor
 @Observable
-class RecordingViewModel {
-    enum RecordingState {
+final class RecordingViewModel {
+
+    enum Phase: Equatable {
         case idle
         case recording
+        case paused
         case analyzing
+        case finished
     }
-    
-    var recordingState: RecordingState = .idle
-    var recordingDuration: TimeInterval = 0
-    var transcription: String = ""
+
+    var phase: Phase = .idle
+    var elapsed: TimeInterval = 0
+    var liveTranscription: String = ""
+
+    var profiles: [Profile] = []
+    var selectedProfile: Profile?
+
+    var error: AppError?
     var showPermissionAlert = false
-    var showAnalysisSheet = false
-    
-    private var recordingService = ManualConflictRecordingService()
-    private var timer: Timer?
-    
-    var formattedDuration: String {
-        let minutes = Int(recordingDuration) / 60
-        let seconds = Int(recordingDuration) % 60
-        return String(format: "%02d:%02d", minutes, seconds)
+    var permissionMessage = ""
+    var completedSession: RecordingSession?
+
+    /// 已停止但尚未成功分析的会话（用于「重试分析」）。
+    private var pendingSession: RecordingSession?
+
+    let recorder = RecordingService()
+    private var analyzer: ConversationAnalyzing
+    private var context: ModelContext?
+
+    init(analyzer: ConversationAnalyzing? = nil) {
+        self.analyzer = analyzer ?? AIService.shared
     }
-    
-    func startRecording() {
+
+    // MARK: 生命周期
+
+    func onAppear(context: ModelContext) {
+        self.context = context
+        loadProfiles()
+        syncFromRecorder()
+    }
+
+    private func loadProfiles() {
+        guard let context else { return }
+        do {
+            profiles = try context.fetch(
+                FetchDescriptor<Profile>(sortBy: [SortDescriptor(\.updatedAt, order: .reverse)])
+            )
+            if selectedProfile == nil { selectedProfile = profiles.first }
+        } catch {
+            AppLog.persistence.error("Load profiles failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func syncFromRecorder() {
+        elapsed = recorder.elapsed
+        liveTranscription = recorder.transcription
+        switch recorder.state {
+        case .idle:      phase = .idle
+        case .recording: phase = .recording
+        case .paused:    phase = .paused
+        case .finished:  phase = .finished
+        case .preparing: phase = .recording
+        }
+    }
+
+    // MARK: 状态文案
+
+    var statusText: String {
+        switch phase {
+        case .idle:
+            return profiles.isEmpty
+                ? "先添加一个人，再开始记录"
+                : "点击开始录音，锁屏也能继续"
+        case .recording:
+            return "正在录音 · 可锁屏放进兜里"
+        case .paused:
+            return "已暂停"
+        case .analyzing:
+            return "正在根据对话内容分析"
+        case .finished:
+            return "已结束"
+        }
+    }
+
+    var canTapPrimary: Bool {
+        if phase == .analyzing { return false }
+        if profiles.isEmpty && phase == .idle { return false }
+        return true
+    }
+
+    var primaryActionLabel: String {
+        switch phase {
+        case .idle, .finished: return "开始录音"
+        case .recording, .paused: return "停止录音"
+        case .analyzing: return "分析中"
+        }
+    }
+
+    // MARK: 动作
+
+    func primaryAction() {
+        switch phase {
+        case .idle, .finished:
+            startRecording()
+        case .recording, .paused:
+            stopAndAnalyze()
+        case .analyzing:
+            break
+        }
+    }
+
+    func togglePause() {
+        switch phase {
+        case .recording:
+            recorder.pause()
+            syncFromRecorder()
+        case .paused:
+            do {
+                try recorder.resume()
+                syncFromRecorder()
+            } catch let appError as AppError {
+                error = appError
+            } catch {
+                self.error = .recorderFailed(error.localizedDescription)
+            }
+        default:
+            break
+        }
+    }
+
+    func cancel() {
+        recorder.cancel()
+        phase = .idle
+        elapsed = 0
+        liveTranscription = ""
+        error = nil
+        Telemetry.shared.track(.recordingCancelled)
+    }
+
+    private func startRecording() {
+        error = nil
         Task {
             do {
-                try await recordingService.startRecording()
-                await MainActor.run {
-                    recordingState = .recording
-                    startTimer()
-                }
+                try await recorder.start()
+                syncFromRecorder()
+                phase = .recording
+                Telemetry.shared.track(.recordingStarted)
+                startMirroring()
+            } catch let appError as AppError {
+                handleStartFailure(appError)
             } catch {
-                await MainActor.run {
-                    showPermissionAlert = true
+                handleStartFailure(.recorderFailed(error.localizedDescription))
+            }
+        }
+    }
+
+    private func handleStartFailure(_ appError: AppError) {
+        error = appError
+        switch appError.recovery {
+        case .openSettings:
+            permissionMessage = appError.localizedDescription + "。请到系统设置中开启对应权限。"
+            showPermissionAlert = true
+        default:
+            break
+        }
+        phase = .idle
+    }
+
+    /// 把 recorder 的实时状态镜像到 ViewModel（recorder 是 @Observable，
+    /// 但嵌套观察在 struct View 里不稳定，这里用定时同步保证刷新）。
+    private func startMirroring() {
+        Task { @MainActor in
+            while recorder.state.isActive {
+                elapsed = recorder.elapsed
+                liveTranscription = recorder.transcription
+                phase = recorder.state == .paused ? .paused : .recording
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+            elapsed = recorder.elapsed
+            liveTranscription = recorder.transcription
+        }
+    }
+
+    private func stopAndAnalyze() {
+        _ = recorder.stop()
+        phase = .analyzing
+        elapsed = recorder.elapsed
+        liveTranscription = recorder.transcription
+
+        Task { await analyzeCurrentRecording() }
+    }
+
+    private func analyzeCurrentRecording() async {
+        guard let context else { return }
+
+        let text = recorder.transcription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let audioURL = recorder.audioFileURL
+
+        // 1) 落库：无论分析成功与否，只要录到了内容就保存记录
+        let session = RecordingSession(
+            sessionType: .conflict,
+            profile: selectedProfile,
+            startedAt: Date().addingTimeInterval(-recorder.elapsed),
+            endedAt: Date(),
+            audioFileURL: nil
+        )
+        session.transcription = text.isEmpty ? nil : text
+        context.insert(session)
+
+        do {
+            try context.save()
+        } catch {
+            AppLog.persistence.error("Save session failed: \(error.localizedDescription, privacy: .public)")
+        }
+
+        // 2) 音频只在内存/临时目录，分析后一律删除
+        if let audioURL { RecordingService.removeFile(at: audioURL) }
+        recorder.discardAudioFile()
+
+        // 3) 没有转写就明确失败，绝不编造分析
+        guard !text.isEmpty else {
+            session.status = SessionStatus.completed.rawValue
+            error = .emptyTranscription
+            phase = .finished
+            pendingSession = session
+            Telemetry.shared.track(.analysisFailed)
+            save(context)
+            return
+        }
+
+        guard let profile = selectedProfile else {
+            error = .persistenceFailed("请先选择这次记录关于谁")
+            phase = .finished
+            pendingSession = session
+            return
+        }
+
+        // 4) 真实调用 AI
+        do {
+            let result = try await analyzer.analyze(
+                conversation: text,
+                counterpartName: profile.name,
+                relationshipType: profile.relationship
+            )
+            session.analysisResult = result
+            session.status = SessionStatus.analyzed.rawValue
+            save(context)
+            recorder.discardAudioFile()
+
+            completedSession = session
+            pendingSession = nil
+            phase = .idle
+            error = nil
+            Telemetry.shared.track(.analysisSucceeded)
+
+            // 24 小时回访（报告 N1）
+            NotificationService.shared.scheduleReflectionFollowUp(sessionID: session.id)
+
+            // 记录一次互动，用于「最近互动」与 Widget
+            profile.lastInteractionAt = Date()
+            profile.interactionCount += 1
+            profile.updatedAt = Date()
+            save(context)
+            DataMaintenance.syncWidget(context: context)
+
+        } catch let appError as AppError {
+            session.status = SessionStatus.completed.rawValue
+            save(context)
+            error = appError
+            phase = .finished
+            pendingSession = session
+            Telemetry.shared.track(.analysisFailed)
+        } catch {
+            session.status = SessionStatus.completed.rawValue
+            save(context)
+            self.error = .serverError(-1)
+            phase = .finished
+            pendingSession = session
+        }
+    }
+
+    /// 重试：优先复用已保存的会话文本，避免重复录音。
+    func retry() {
+        error = nil
+        if let session = pendingSession, let text = session.transcription, !text.isEmpty,
+           let profile = selectedProfile {
+            phase = .analyzing
+            Task {
+                do {
+                    let result = try await analyzer.analyze(
+                        conversation: text,
+                        counterpartName: profile.name,
+                        relationshipType: profile.relationship
+                    )
+                    session.analysisResult = result
+                    session.status = SessionStatus.analyzed.rawValue
+                    if let context { save(context) }
+                    completedSession = session
+                    pendingSession = nil
+                    phase = .idle
+                    Telemetry.shared.track(.analysisSucceeded)
+                } catch let appError as AppError {
+                    self.error = appError
+                    phase = .finished
+                } catch {
+                    self.error = .serverError(-1)
+                    phase = .finished
                 }
             }
+        } else {
+            phase = .idle
         }
     }
-    
-    func stopRecording() {
-        recordingService.stopRecording()
-        stopTimer()
-        
-        recordingState = .analyzing
-        
-        // 模拟分析过程
-        Task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            await MainActor.run {
-                transcription = "这是模拟的对话转录内容。在实际应用中，这里会显示AI转录的对话文本。"
-                recordingState = .idle
-                recordingDuration = 0
-                showAnalysisSheet = true
-            }
+
+    private func save(_ context: ModelContext) {
+        do {
+            try context.save()
+        } catch {
+            AppLog.persistence.error("Save failed: \(error.localizedDescription, privacy: .public)")
         }
-    }
-    
-    func cancelRecording() {
-        recordingService.stopRecording()
-        stopTimer()
-        recordingState = .idle
-        recordingDuration = 0
-    }
-    
-    func openSettings() {
-        if let url = URL(string: UIApplication.openSettingsURLString) {
-            UIApplication.shared.open(url)
-        }
-    }
-    
-    private func startTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            self.recordingDuration += 1
-        }
-    }
-    
-    private func stopTimer() {
-        timer?.invalidate()
-        timer = nil
     }
 }

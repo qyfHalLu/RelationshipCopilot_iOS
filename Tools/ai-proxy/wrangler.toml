@@ -1,0 +1,29 @@
+# 关系副驾 AI 代理（Cloudflare Worker）
+#
+# 部署：
+#   cd Tools/ai-proxy
+#   npx wrangler secret put SOPHNET_API_KEY
+#   npx wrangler secret put APP_TOKEN
+#   npx wrangler deploy
+#
+# 本地跑测试（不需要 wrangler，也不需要网络）：
+#   node worker.test.mjs
+
+name = "relcopilot-proxy"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# 密钥不写在这里。
+#
+# 两个 secret 都用 `wrangler secret put` 写入，它存进 Cloudflare 的加密存储。
+# 写进这个文件再提交，就等于又犯了一次"密钥进仓库"的错 ——
+# 而这个项目已经犯过一次，密钥在公开仓库里躺了 7.5 个月。
+#
+# 普通变量放这里。
+[vars]
+MODEL = "DeepSeek-V4.1-Flash-1017"
+
+# 可选：给 Worker 自己加个访问频率上限，挡住明显的刷量。
+# 代码里的按 IP 配额是应用层的软限制，这里是边缘层的硬限制。
+# [limits]
+#   ...

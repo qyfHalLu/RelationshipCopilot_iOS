@@ -1,20 +1,36 @@
 # RelationshipCopilot - XcodeGen Configuration
+#
+# 修复报告清单：
+#  - 原配置只有 app + widget 两个 target，**没有任何测试 target**，全仓库 0 个 XCTest。
+#    现新增 RelationshipCopilotTests（单元测试）。
+#  - 原 `TARGETED_DEVICE_FAMILY: "1,2"` 声明支持 iPad，但全部页面都是 iPhone 单列布局，
+#    iPad 上会被拉成超宽卡片。现改为仅 iPhone("1")，把范围收窄到"真的做了适配"为止。
+#  - 原 `DEVELOPMENT_TEAM: ""` + 自动签名，真机归档会失败。这里保留空值（团队 ID 因人而异），
+#    但补充说明：归档前必须填入自己的 Team ID，否则只能跑模拟器。
+#  - 纳入 PrivacyInfo.xcprivacy（原仓库完全缺失，Apple 自动化校验会直接拒）。
+#  - 新增 Core 目录（纯逻辑层）。
+
 name: RelationshipCopilot
 options:
   bundleIdPrefix: com.relationshipcopilot
   deploymentTarget:
     iOS: "17.0"
-  xcodeVersion: "15.0"
+  xcodeVersion: "16.0"
   generateEmptyDirectories: true
+  groupSortPosition: top
 
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    TARGETED_DEVICE_FAMILY: "1,2"
-    MARKETING_VERSION: "1.0.0"
-    CURRENT_PROJECT_VERSION: "1"
+    # 仅 iPhone：当前没有 iPad 版布局（报告 C10）。
+    TARGETED_DEVICE_FAMILY: "1"
+    MARKETING_VERSION: "1.1.0"
+    CURRENT_PROJECT_VERSION: "2"
+    # 归档前必须填入自己的 Team ID，例如 "ABCDE12345"。
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_STRICT_CONCURRENCY: minimal
 
 targets:
   RelationshipCopilot:
@@ -22,6 +38,9 @@ targets:
     platform: iOS
     sources:
       - path: App
+        excludes:
+          - "Info.plist"
+      - path: Core
       - path: Data
       - path: Presentation
       - path: Services
@@ -32,6 +51,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: App/RelationshipCopilot.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        DEVELOPMENT_ASSET_PATHS: ""
     dependencies:
       - target: RelationshipCopilotWidgetExtension
         embed: true
@@ -41,12 +61,51 @@ targets:
     platform: iOS
     sources:
       - path: RelationshipCopilotWidget
+        excludes:
+          - "Info.plist"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.relationshipcopilot.app.widget
         INFOPLIST_FILE: RelationshipCopilotWidget/Info.plist
         SKIP_INSTALL: YES
         ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME: WidgetBackground
+        CODE_SIGN_ENTITLEMENTS: RelationshipCopilotWidget/RelationshipCopilotWidget.entitlements
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+
+  RelationshipCopilotTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.relationshipcopilot.app.tests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: RelationshipCopilot
+
+  # 界面核验 target。
+  #
+  # 为什么必须有它：SwiftUI 的典型缺陷（漏包 NavigationStack 导致标题和工具栏按钮
+  # 静默消失、浮动 tab bar 压住内容、超大字号下网格被压成色块）在编译期和单元测试里
+  # **完全看不出来**。只有真实渲染出的像素才能暴露它们。
+  #
+  # 本 target 只做两件事：驱动到指定状态、截图存进 result bundle。
+  # 断言刻意保持"这一屏确实存在"的强度 —— 真正的判断靠人眼看图。
+  RelationshipCopilotUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.relationshipcopilot.app.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: RelationshipCopilot
+    dependencies:
+      - target: RelationshipCopilot
 
 schemes:
   RelationshipCopilot:
@@ -54,10 +113,29 @@ schemes:
       targets:
         RelationshipCopilot: all
         RelationshipCopilotWidgetExtension: all
+        RelationshipCopilotUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
+      gatherCoverageData: true
+      targets:
+        - RelationshipCopilotTests
+        - RelationshipCopilotUITests
+      # 内测构建标志。
+      #
+      # `ReleaseGateTests` 有一条断言盯着 Info.plist 的 `RCAllowBetaSkipAuth`：
+      #   · 没设这个变量 → 要求开关**关闭**（发版状态）
+      #   · 设 RC_BETA_BUILD=1 → 要求开关**打开**（内测状态）
+      #
+      # 现在仓库里是打开的内测状态，所以这里声明内测。
+      # 真到发版那天，删掉这里 + 把 Info.plist 改成 false，两处必须一起动；
+      # 只改一处会让测试红 —— 那正是它存在的意义。
+      #
+      # 注意：必须写在 scheme 的 test 段。写在 target 的 scheme 下
+      # 只会生成到 RelationshipCopilotTests.xcscheme 里，而没人用它跑测试。
+      environmentVariables:
+        RC_BETA_BUILD: "1"
     profile:
       config: Release
     analyze:

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Widget 与主 App 共享 App Group，用于读取真实快照。
+         修复报告：主 App 此前从未写入这些键，Widget 永远显示「伴侣 / 75」。 -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.com.relationshipcopilot.app</string>
+    </array>
+</dict>
+</plist>

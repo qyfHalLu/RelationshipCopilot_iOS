@@ -1,0 +1,95 @@
+name: iOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      # 构建与测试用同一条 scheme。
+      #
+      # 之前这里有个隐蔽的漂移：logic-check 步骤列了 `Core/RelationshipHealth.swift`，
+      # 而该文件在阶段三（删除关系健康度）已被移除，CI 一直红着。
+      # 教训是**手工维护的文件清单一定会漂移**，所以下面的清单校验步骤是必需的，
+      # 不是可选的保险。
+      - name: Build (Debug, simulator)
+        run: |
+          xcodebuild -project RelationshipCopilot.xcodeproj \
+            -scheme RelationshipCopilot \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Unit tests
+        run: |
+          xcodebuild test -project RelationshipCopilot.xcodeproj \
+            -scheme RelationshipCopilot \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -only-testing:RelationshipCopilotTests \
+            CODE_SIGNING_ALLOWED=NO
+
+      # 纯逻辑冒烟：不需要模拟器，秒级反馈。
+      #
+      # 文件清单不再硬编码在这里，而是从 `Tools/logic-check/sources.txt` 读取，
+      # 并由下一步校验「Core 下每个可独立编译的文件都被收录」。
+      - name: Logic smoke check (no simulator)
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2046
+          swiftc -o /tmp/logic-check \
+            $(grep -v '^#' Tools/logic-check/sources.txt | grep -v '^$') \
+            Tools/logic-check/main.swift
+          /tmp/logic-check
+
+      # 守住清单与源码的一致性。
+      #
+      # 规则：Core/ 下每个**不依赖 App/Services 层**的 .swift 都必须出现在 sources.txt 里。
+      # 目前唯一的例外是 `EndpointConfiguration.swift`（它引用 Services 的
+      # `SecureStorageService`，无法独立编译），所以在下方显式排除并写明原因。
+      # 新增 Core 文件却忘了登记时，这一步会失败 —— 而不是让逻辑校验悄悄少测一块。
+      - name: Verify logic-check file list is complete
+        run: |
+          set -euo pipefail
+
+          # 有意排除的文件（每一条都必须给理由，否则不允许加）
+          # 理由：EndpointConfiguration 引用 Services 层的 SecureStorageService，无法独立编译。
+          EXCLUDED="Core/EndpointConfiguration.swift"
+
+          # ① 正向：Core 下每个可独立编译的文件都必须在清单里
+          MISSING=""
+          for f in Core/*.swift; do
+            [ "$f" = "$EXCLUDED" ] && continue
+            grep -qxF "$f" Tools/logic-check/sources.txt || MISSING="$MISSING $f"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::以下 Core 文件未登记进 Tools/logic-check/sources.txt:$MISSING"
+            echo "它们不会被逻辑冒烟覆盖。请加入 sources.txt，或在 EXCLUDED 中说明排除原因。"
+            exit 1
+          fi
+
+          # ② 反向：清单里不许有已删除的文件
+          # 这正是历史上 CI 长期失败的原因：RelationshipHealth.swift 被删除后仍被引用。
+          STALE=""
+          while IFS= read -r f; do
+            case "$f" in ''|'#'*) continue;; esac
+            [ -f "$f" ] || STALE="$STALE $f"
+          done < Tools/logic-check/sources.txt
+          if [ -n "$STALE" ]; then
+            echo "::error::sources.txt 引用了不存在的文件:$STALE"
+            exit 1
+          fi
+
+          echo "✅ 逻辑校验清单与 Core/ 一致"

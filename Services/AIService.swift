@@ -2,445 +2,752 @@
 //  AIService.swift
 //  RelationshipCopilot
 //
-//  AI分析服务 - 使用SophNet Kimi K2.5模型
+//  AI 分析服务。
+//
+//  修复报告 A2 / A6 / D1 / D2 / B7：
+//   - D1（P0）：移除 `AIService.swift:277` 里明文硬编码的 SophNet 密钥。客户端不再持有第三方密钥，
+//              改由 `EndpointConfiguration` 解析「自有代理」或「调试直连（Keychain 取密钥）」。
+//   - D2：配额在**所有**分析入口统一校验与扣减（原 `generateHealthReport` 完全不检查）；
+//         解析失败不再编造 75 分（原 `parseAnalysisResult` 用 `?? 75`）。
+//   - A2：抽出 `ConversationAnalyzing` 协议，View 依赖协议而非单例，便于预览与测试注入。
+//   - B7：请求加超时与有限重试；网络错误归一化为 `AppError`。
+//
+//  诚实边界：当前仓库没有后端。`proxy` 模式需要在服务端实现本文件注释里约定的接口；
+//  未配置时 `analyze` 会抛 `.aiNotConfigured`，UI 明确提示，而不是返回假结果。
 //
 
 import Foundation
 import SwiftData
 
-/// AI服务错误类型
-enum AIServiceError: LocalizedError {
-    case networkError
-    case invalidResponse
-    case analysisFailed
-    case quotaExceeded
-    case apiError(String)
-    
-    var errorDescription: String? {
-        switch self {
-        case .networkError:
-            return "网络连接失败，请检查网络设置"
-        case .invalidResponse:
-            return "服务器响应无效"
-        case .analysisFailed:
-            return "分析处理失败，请稍后重试"
-        case .quotaExceeded:
-            return "今日分析次数已用完"
-        case .apiError(let message):
-            return message
-        }
-    }
+// MARK: - 协议
+
+/// 对话分析能力。View 层依赖此协议，便于注入 Mock。
+protocol ConversationAnalyzing: Sendable {
+    /// 分析一段对话文本。
+    func analyze(
+        conversation: String,
+        counterpartName: String,
+        relationshipType: RelationshipType
+    ) async throws -> AnalysisResult
 }
 
-/// Chat消息
-struct ChatMessage: Codable {
-    let role: String
-    let content: String
+// MARK: - 请求/响应线格式
+
+/// 自有代理的请求体。
+/// 服务端约定：`POST {base}/v1/relationship/analyze`
+/// 请求 `{ "conversation": "...", "counterpartName": "...", "relationshipType": "partner" }`
+/// 响应：优先接受 `{ "analysis": { score, summary, strengths, improvements, suggestions,
+///                                  emotionalTrend, communicationQuality } }`，
+///      也兼容 OpenAI Chat Completions 形态（`choices[0].message.content` 内含同一 JSON）。
+private struct ProxyAnalyzeRequest: Encodable {
+    let conversation: String
+    let counterpartName: String
+    let relationshipType: String
 }
 
-/// API请求体
-struct ChatRequest: Codable {
+/// 直连形态的 Chat Completions 请求体（仅调试用）。
+private struct ChatCompletionRequest: Encodable {
     let model: String
     let messages: [ChatMessage]
     let temperature: Double
     let max_tokens: Int
 }
 
-/// API响应体
-struct ChatResponse: Codable {
+private struct ChatMessage: Codable {
+    let role: String
+    let content: String
+}
+
+private struct ChatCompletionResponse: Decodable {
+    struct Choice: Decodable {
+        struct Message: Decodable { let content: String? }
+        let message: Message?
+        /// `"stop"` 表示正常结束；`"length"` 表示撞上 `max_tokens` 被截断。
+        ///
+        /// **必须解析这一栏。** 推理模型（如 DeepSeek-V4.1-Flash）会把
+        /// `reasoning_content` 计入 `max_tokens`，正文可能只剩一点点，
+        /// JSON 就被截在半句话上。以前这里不读 `finish_reason`，
+        /// 于是截断只能表现为"JSON 解析失败"，诊断信息是笼统的"格式漂移"——
+        /// 排查时根本想不到是预算不够。
+        let finish_reason: String?
+    }
+    struct APIError: Decodable { let message: String? }
     let choices: [Choice]?
     let error: APIError?
-    
-    struct Choice: Codable {
-        let message: Message?
-        
-        struct Message: Codable {
-            let content: String?
-        }
-    }
-    
-    struct APIError: Codable {
-        let message: String?
+}
+
+private struct ProxyEnvelope: Decodable {
+    let analysis: ProxyAnalysisPayload?
+    let choices: [ChatCompletionResponse.Choice]?
+    let error: ChatCompletionResponse.APIError?
+}
+
+/// 快速工具的代理请求/响应（`POST {base}/v1/assist`）。
+private struct AssistRequest: Encodable {
+    let tool: String
+    let input: String
+}
+
+/// 评理的代理请求（`POST {base}/v1/dispute/evaluate`）。
+/// 服务端约定：原样把 systemPrompt / userMessage 转给模型，回传模型原始文本（含 JSON）。
+private struct DisputeProxyRequest: Encodable {
+    let systemPrompt: String
+    let userMessage: String
+    let temperature: Double
+    let maxTokens: Int
+
+    init(systemPrompt: String, userMessage: String) {
+        self.systemPrompt = systemPrompt
+        self.userMessage = userMessage
+        self.temperature = DisputePrompt.temperature
+        self.maxTokens = DisputePrompt.maxOutputTokens
     }
 }
 
-/// AI服务
+private struct AssistEnvelope: Decodable {
+    let text: String?
+    let choices: [ChatCompletionResponse.Choice]?
+    let error: ChatCompletionResponse.APIError?
+}
+
+private struct ProxyAnalysisPayload: Decodable {
+    let score: Int?
+    let summary: String?
+    let strengths: [String]?
+    let improvements: [String]?
+    let suggestions: [String]?
+    let emotionalTrend: String?
+    let communicationQuality: String?
+}
+
+// MARK: - 服务
+
 @MainActor
-final class AIService: ObservableObject {
+@Observable
+final class AIService: ConversationAnalyzing, DisputeEvaluating {
+
     static let shared = AIService()
-    
-    // ========== 配置区域 ==========
-    private let apiEndpoint = "https://api.sophnet.com/v1/text/chatcompletion_v2"
-    private let modelName = "Kimi-K2.5"
-    // ==============================
-    
-    @Published var isAnalyzing: Bool = false
-    @Published var lastError: AIServiceError?
-    @Published var dailyQuota: Int = 10
-    @Published var usedToday: Int = 0
-    
-    private let userDefaults = UserDefaults.standard
-    private let quotaKey = "AIAnalysisDailyQuota"
-    private let usedKey = "AIAnalysisUsedToday"
-    private let dateKey = "AIAnalysisLastDate"
-    
-    // 系统提示词
-    private let systemPrompt = """
-你是一个专业的情感关系分析师，擅长分析情侣、夫妻、家人、朋友之间的对话和互动，给出关系健康度评分和改进建议。
 
-请根据用户提供的对话内容或关系信息，从以下维度进行分析：
-1. 沟通质量 - 双方是否有效表达感受和需求
-2. 情感连接 - 是否有情感支持和共鸣
-3. 冲突处理 - 遇到分歧时如何解决
-4. 表达方式 - 语言是否温和、有爱
-5. 总体氛围 - 关系是轻松还是紧张
+    // MARK: 状态
 
-请以JSON格式返回分析结果，字段如下：
-{
-    "score": 85,  // 0-100的整数，表示关系健康度
-    "summary": "简要总结（50字以内）",
-    "strengths": ["优点1", "优点2", "优点3"],
-    "improvements": ["改进点1", "改进点2"],
-    "suggestions": ["具体建议1", "具体建议2"],
-    "emotionalTrend": "上升/下降/稳定",
-    "communicationQuality": "优秀/良好/一般/需要改善"
-}
+    private(set) var isAnalyzing = false
+    var lastError: AppError?
 
-注意：只返回JSON，不要有其他文字。
-"""
+    private(set) var dailyLimit: Int
+    private(set) var usedToday: Int
+    private(set) var modeDescription: String
 
-    private init() {
+    // MARK: 依赖
+
+    private let keychain: SecureStoring
+    private let defaults: UserDefaults
+    private let session: URLSession
+    private let mode: AIEndpointMode
+
+    private enum Keys {
+        static let used = "AIAnalysisUsedToday"
+        static let lastDay = "AIAnalysisLastResetDay"
+    }
+
+    /// 直连时使用的模型名（仅调试模式走这条路径）。
+    ///
+    /// 从 Info.plist 的 `RCDirectModelName` 读取，而不是写死在代码里：
+    /// 模型迭代很快，写死意味着换模型要改代码、重新编译、重新分发。
+    private let directModelName: String
+
+    /// 代理模式的共享令牌，存在 Keychain。
+    ///
+    /// 它不是"身份认证"，只是挡住"拿到地址就能白嫖额度"。
+    /// 密钥放在客户端理论上可被逆向提取，所以真正的配额控制最终必须在服务端做 ——
+    /// 内测阶段用它省掉一次滥用就够。
+    ///
+    /// 读不到时返回 nil，请求会照发（服务端会回 401）。
+    /// 这里**不**因为缺令牌就提前抛错：那样错误会显示成"AI 未配置"，
+    /// 而真正的原因是"配了代理但忘了写令牌"，两者排查方向完全不同。
+    ///
+    /// ## 为什么每次请求都重读，而不是 init 时缓存
+    ///
+    /// 它原来是 `let`，只在 `init` 里读一次。而设置页允许内测用户**运行时**
+    /// 粘贴令牌 —— 那条路径写进 Keychain 后，`AIService.shared` 早已构造完毕，
+    /// 手里的 `proxyToken` 永远是 nil。
+    ///
+    /// 表现：用户填了正确的令牌、看到「已保存」，然后每一次请求都是 401。
+    /// 而且重进设置页会显示"已保存"，看起来一切正常。唯一解法是杀掉 App 重开 ——
+    /// 一个没人会想到的解法。
+    ///
+    /// Keychain 读取是毫秒级的内存操作（不是磁盘 IO），每次读没有成本。
+    private var proxyToken: String? {
+        try? keychain.retrieve(key: EndpointConfiguration.proxyTokenKeychainAccount)
+    }
+
+    static let proxyTokenHeader = "x-app-token"
+
+    init(
+        keychain: SecureStoring = SecureStorageService.shared,
+        defaults: UserDefaults = .standard,
+        session: URLSession? = nil,
+        mode: AIEndpointMode? = nil,
+        dailyLimit: Int = 10
+    ) {
+        self.keychain = keychain
+        self.defaults = defaults
+        self.mode = mode ?? EndpointConfiguration.resolve(keychain: keychain)
+        self.directModelName = EndpointConfiguration.directModel()
+        self.dailyLimit = dailyLimit
+        self.modeDescription = EndpointConfiguration.diagnostics(for: self.mode)
+
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForRequest = 45
+            configuration.timeoutIntervalForResource = 90
+            configuration.waitsForConnectivity = false
+            self.session = URLSession(configuration: configuration)
+        }
+
+        self.usedToday = 0
         checkAndResetDailyQuota()
     }
-    
-    // MARK: - Public Methods
-    
-    /// 分析对话录音（使用真实API）
-    func analyzeConversation(recording: RecordingSession, profile: Profile) async throws -> AnalysisResult {
-        guard !isAnalyzing else {
-            throw AIServiceError.analysisFailed
+
+    // MARK: 对外能力
+
+    var quotaPolicy: QuotaPolicy { QuotaPolicy(limit: dailyLimit) }
+    var remainingQuota: Int { quotaPolicy.remaining(used: usedToday) }
+    var isConfigured: Bool { mode.isAvailable }
+
+    /// 分析一段对话。所有入口都必须经过这里，以保证配额口径一致。
+    func analyze(
+        conversation: String,
+        counterpartName: String,
+        relationshipType: RelationshipType
+    ) async throws -> AnalysisResult {
+        guard !isAnalyzing else { throw AppError.busy }
+        guard !conversation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AppError.emptyTranscription
         }
-        
-        guard usedToday < dailyQuota else {
-            throw AIServiceError.quotaExceeded
-        }
-        
+        guard mode.isAvailable else { throw AppError.aiNotConfigured }
+        guard !quotaPolicy.isExhausted(used: usedToday) else { throw AppError.quotaExceeded }
+
         isAnalyzing = true
         lastError = nil
-        
-        defer {
-            isAnalyzing = false
-        }
-        
+        defer { isAnalyzing = false }
+
         do {
-            // 使用Kimi K2.5分析
-            let result = try await performAIAnalysis(
-                conversationText: recording.transcription ?? "无文字记录",
-                profileName: profile.name,
-                relationshipType: relationshipTypeText(profile.relationshipType)
+            let parsed = try await performRequest(
+                conversation: conversation,
+                counterpartName: counterpartName,
+                relationshipType: relationshipType
             )
-            usedToday += 1
-            saveUsage()
-            return result
-        } catch let error as AIServiceError {
+            consumeQuota()
+            return AnalysisResult(parsed: parsed)
+        } catch let error as AppError {
+            lastError = error
+            throw error
+        } catch let error as AIResponseParserError {
+            let mapped = AppError.malformedAIResponse(error.localizedDescription)
+            lastError = mapped
+            throw mapped
+        } catch {
+            let mapped = AppError.fromNetwork(error)
+            lastError = mapped
+            throw mapped
+        }
+    }
+
+    /// 基于历史记录生成综合报告。
+    /// 修复报告 D2：原实现完全不校验配额，是绕过限制的后门；现在与 `analyze` 共用同一配额。
+    func generateHealthReport(
+        for profile: Profile,
+        sessions: [RecordingSession]
+    ) async throws -> AnalysisResult {
+        let transcriptions = sessions
+            .compactMap(\.transcription)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .prefix(5)
+
+        guard !transcriptions.isEmpty else {
+            // 没有任何真实文本时，不伪造评分。返回不含分数的空壳，由 UI 引导用户去录音。
+            return AnalysisResult()
+        }
+
+        return try await analyze(
+            conversation: transcriptions.joined(separator: "\n---\n"),
+            counterpartName: profile.name,
+            relationshipType: profile.relationship
+        )
+    }
+
+    func resetDailyQuota() {
+        usedToday = 0
+        persistQuota()
+    }
+
+    // MARK: - 评理（第三方之见）
+    //
+    // 与 analyze / quickTool 的区别：
+    //   - 评理有**双桶限流**（RPM 120 / TPM 600000）。超限不是"变慢"，是 429 直接终止任务，
+    //     所以发请求前先在本地桶里预检，不够就返回 `.rateLimited` 让用户等几秒。
+    //   - 安全筛查在**调用模型之前**跑。命中即返回 .blocked，一个 token 都不花。
+    //   - 解析失败不编造结果，降级为原话摘录（`.fallback`）。
+
+    /// 本地速率桶。跨调用累积，随 App 进程生命周期存在。
+    private var rateLimiter = ModelRateLimiter()
+
+    /// 最近一次评理的速率诊断（设置页展示用）。
+    var rateLimitDiagnostics: String {
+        rateLimiter.diagnostics()
+    }
+
+    func evaluate(_ request: DisputeRequest) async throws -> DisputeOutcome {
+        guard !isAnalyzing else { throw AppError.busy }
+
+        // ① 安全前置：命中即拒绝评理，不调用模型
+        let screeningA = SafetyScreen.screen(request.sideA)
+        if screeningA.isBlocking {
+            AppLog.ai.notice("Dispute blocked locally (A): \(screeningA.concerns.map(\.rawValue).joined(separator: ","), privacy: .public)")
+            return .blocked(SafetyScreen.guidance(for: screeningA.concerns))
+        }
+        if let sideB = request.sideB {
+            let screeningB = SafetyScreen.screen(sideB)
+            if screeningB.isBlocking {
+                AppLog.ai.notice("Dispute blocked locally (B): \(screeningB.concerns.map(\.rawValue).joined(separator: ","), privacy: .public)")
+                return .blocked(SafetyScreen.guidance(for: screeningB.concerns))
+            }
+        }
+
+        guard mode.isAvailable else { throw AppError.aiNotConfigured }
+        guard !quotaPolicy.isExhausted(used: usedToday) else { throw AppError.quotaExceeded }
+
+        // ② 速率预检：本地桶不够就明确告知要等几秒，而不是发出去撞 429
+        if let limitError = rateLimiter.checkDisputeRequest() {
+            throw AppError.rateLimited(limitError.localizedDescription)
+        }
+
+        isAnalyzing = true
+        lastError = nil
+        defer { isAnalyzing = false }
+
+        let systemPrompt = DisputePrompt.systemPrompt(
+            mode: request.mode,
+            relationshipLabel: request.relationshipLabel
+        )
+        let userMessage: String
+        switch request.mode {
+        case .sameDevice:
+            // gate 已保证 sideB 非 nil；这里仍做兜底，避免坐标外调用泄露单方数据
+            guard let sideB = request.sideB else { throw AppError.malformedAIResponse("缺少第二份证词") }
+            userMessage = DisputePrompt.sameDeviceUserMessage(a: request.sideA, b: sideB)
+        case .solo:
+            userMessage = DisputePrompt.soloUserMessage(request.sideA)
+        }
+
+        let actualTokens = TokenEstimator.estimateDisputeRequest(
+            systemPrompt: systemPrompt,
+            testimonyA: userMessage,
+            testimonyB: "",
+            maxOutputTokens: DisputePrompt.maxOutputTokens
+        )
+
+        do {
+            let raw = try await performDisputeRequest(systemPrompt: systemPrompt, userMessage: userMessage)
+
+            // 请求成功才扣桶（服务端对失败请求通常也不计费）
+            rateLimiter.recordDisputeRequest(actualTokens: actualTokens)
+            consumeQuota()
+
+            do {
+                let verdict = try DisputeVerdictParser.parse(raw)
+                return .verdict(verdict)
+            } catch let parseError as DisputeVerdictParserError {
+                // 模型侧安全拒答 → 当安全拦截处理，不给降级结果
+                if case .safetyBlocked = parseError {
+                    let concerns = SafetyScreen.screen(raw).concerns
+                    let effective = concerns.isEmpty ? SafetyConcern.allCases : concerns
+                    return .blocked(SafetyScreen.guidance(for: effective))
+                }
+
+                // 其余解析失败：重试一次（格式漂移是最常见原因），仍失败则降级
+                AppLog.ai.warning("Dispute parse failed, retrying once: \(parseError.localizedDescription, privacy: .public)")
+                let retryRaw = try? await performDisputeRequest(systemPrompt: systemPrompt, userMessage: userMessage)
+                if let retryRaw,
+                   let retried = try? DisputeVerdictParser.parse(retryRaw) {
+                    return .verdict(retried)
+                }
+
+                // 降级：不编造评理，只对称摘录双方原话
+                let fallback = DisputeVerdictParser.fallback(
+                    a: request.sideA,
+                    b: request.sideB ?? request.sideA,
+                    reason: parseError.localizedDescription
+                )
+                return .fallback(fallback, reason: parseError.localizedDescription)
+            }
+        } catch let error as AppError {
             lastError = error
             throw error
         } catch {
-            lastError = .networkError
-            throw AIServiceError.networkError
+            let mapped = AppError.fromNetwork(error)
+            lastError = mapped
+            throw mapped
         }
     }
-    
-    /// 生成关系健康度报告
-    func generateHealthReport(for profile: Profile, sessions: [RecordingSession]) async throws -> AnalysisResult {
-        guard !isAnalyzing else {
-            throw AIServiceError.analysisFailed
-        }
-        
-        isAnalyzing = true
-        
-        defer {
-            isAnalyzing = false
-        }
-        
-        // 如果有历史记录，使用AI生成综合报告
-        if !sessions.isEmpty {
-            let combinedText = sessions.prefix(5).compactMap { $0.transcription }.joined(separator: "\n---\n")
-            
-            if !combinedText.isEmpty {
-                return try await performAIAnalysis(
-                    conversationText: combinedText,
-                    profileName: profile.name,
-                    relationshipType: relationshipTypeText(profile.relationshipType)
-                )
-            }
-        }
-        
-        // 没有足够数据时生成默认报告
-        let avgScore = calculateAverageScore(from: sessions)
-        return AnalysisResult(
-            emotionScore: Double(avgScore),
-            communicationPatterns: generateStrengths(profile: profile),
-            recommendations: generateSuggestions(profile: profile, score: avgScore),
-            summary: generateSummary(score: avgScore, profile: profile),
-            keywords: generateImprovements(score: avgScore)
-        )
-    }
-    
-    /// 获取智能建议
-    func getSuggestions(for profile: Profile) async -> [String] {
-        var suggestions: [String] = []
-        
-        let calendar = Calendar.current
-        let now = Date()
-        
-        switch profile.relationshipType {
-        case "partner", "spouse":
-            suggestions = [
-                "今天可以给对方一个惊喜，表达你的感激之情",
-                "一起回忆初次相遇的美好时光",
-                "尝试一起完成一个新活动，增加共同回忆"
-            ]
-        case "family":
-            suggestions = [
-                "给家人打个电话，关心近况",
-                "分享一些生活中的趣事",
-                "一起用餐，增进感情"
-            ]
-        case "friend":
-            suggestions = [
-                "约出来喝杯咖啡聊聊近况",
-                "分享最近看到的有趣内容",
-                "在重要日子送上祝福"
-            ]
-        case "colleague":
-            suggestions = [
-                "在工作中多给予支持和配合",
-                "适当表达感谢和认可"
-            ]
-        default:
-            suggestions = ["保持真诚和尊重的沟通"]
-        }
-        
-        if let birthday = profile.birthday {
-            let daysUntilBirthday = calendar.dateComponents([.day], from: now, to: birthday).day ?? 0
-            if daysUntilBirthday > 0 && daysUntilBirthday <= 7 {
-                suggestions.insert("即将迎来对方的生日，提前准备惊喜吧！", at: 0)
-            }
-        }
-        
-        return suggestions
-    }
-    
-    /// 重置每日配额
-    func resetDailyQuota() {
-        usedToday = 0
-        saveUsage()
-    }
-    
-    // MARK: - Private Methods - AI分析
-    
-    private func performAIAnalysis(conversationText: String, profileName: String, relationshipType: String) async throws -> AnalysisResult {
-        // 构建用户prompt
-        let userPrompt = """
-请分析以下\(relationshipType)关系中的对话内容。
 
-对方姓名：\(profileName)
+    private func performDisputeRequest(systemPrompt: String, userMessage: String) async throws -> String {
+        switch mode {
+        case .unconfigured:
+            throw AppError.aiNotConfigured
 
-对话内容：
-\(conversationText)
-
-请分析这段对话中双方的关系健康程度，并给出评分和改进建议。
-"""
-        
-        // 构建请求
-        let messages = [
-            ChatMessage(role: "system", content: systemPrompt),
-            ChatMessage(role: "user", content: userPrompt)
-        ]
-        
-        let request = ChatRequest(
-            model: modelName,
-            messages: messages,
-            temperature: 0.7,
-            max_tokens: 1500
-        )
-        
-        // 编码请求体
-        guard let url = URL(string: apiEndpoint) else {
-            throw AIServiceError.invalidResponse
-        }
-        
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.setValue("Bearer ikxSEUNZhZf8DwR9Ey889ZF0n_dElfgJ_bRluP4RB1YTXVKT1M3HAsvoprWtWIwsHLE4kJbp9y-T42ttq9pFFQ", forHTTPHeaderField: "Authorization")
-        
-        let encoder = JSONEncoder()
-        urlRequest.httpBody = try encoder.encode(request)
-        
-        // 发送请求
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AIServiceError.invalidResponse
-        }
-        
-        guard httpResponse.statusCode == 200 else {
-            if httpResponse.statusCode == 401 {
-                throw AIServiceError.apiError("API密钥无效")
-            } else if httpResponse.statusCode == 429 {
-                throw AIServiceError.quotaExceeded
-            }
-            throw AIServiceError.apiError("HTTP \(httpResponse.statusCode)")
-        }
-        
-        // 解析响应
-        let decoder = JSONDecoder()
-        let chatResponse = try decoder.decode(ChatResponse.self, from: data)
-        
-        guard let content = chatResponse.choices?.first?.message?.content else {
-            if let errorMessage = chatResponse.error?.message {
-                throw AIServiceError.apiError(errorMessage)
-            }
-            throw AIServiceError.invalidResponse
-        }
-        
-        // 解析JSON结果
-        return try parseAnalysisResult(content)
-    }
-    
-    private func parseAnalysisResult(_ jsonString: String) throws -> AnalysisResult {
-        // 尝试提取JSON部分
-        var cleanJson = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // 移除可能的markdown代码块
-        if cleanJson.hasPrefix("```json") {
-            cleanJson = String(cleanJson.dropFirst(7))
-        }
-        if cleanJson.hasPrefix("```") {
-            cleanJson = String(cleanJson.dropFirst(3))
-        }
-        if cleanJson.hasSuffix("```") {
-            cleanJson = String(cleanJson.dropLast(3))
-        }
-        cleanJson = cleanJson.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        guard let data = cleanJson.data(using: .utf8) else {
-            throw AIServiceError.invalidResponse
-        }
-        
-        // 自定义解析，兼容不同字段名
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let score = json["score"] as? Int ?? 75
-            let summary = json["summary"] as? String ?? ""
-            let strengths = json["strengths"] as? [String] ?? []
-            let improvements = json["improvements"] as? [String] ?? []
-            let suggestions = json["suggestions"] as? [String] ?? []
-            let emotionalTrend = json["emotionalTrend"] as? String ?? "稳定"
-            let communicationQuality = json["communicationQuality"] as? String ?? "良好"
-            
-            return AnalysisResult(
-                emotionScore: Double(score),
-                communicationPatterns: strengths,
-                recommendations: suggestions,
-                summary: summary,
-                keywords: improvements
+        case .proxy(let baseURL):
+            var request = URLRequest(url: baseURL.appending(path: "v1/dispute/evaluate"))
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(
+                DisputeProxyRequest(systemPrompt: systemPrompt, userMessage: userMessage)
             )
+            let (data, response) = try await send(request)
+            try validate(response: response)
+
+            if let envelope = try? JSONDecoder().decode(AssistEnvelope.self, from: data) {
+                if let text = envelope.text, !text.isEmpty { return text }
+                if let content = envelope.choices?.first?.message?.content, !content.isEmpty { return content }
+                if let message = envelope.error?.message { throw AppError.malformedAIResponse(message) }
+            }
+            throw AppError.malformedAIResponse("响应结构无法识别")
+
+        case .direct(let baseURL, let apiKey):
+            var request = URLRequest(url: baseURL)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            let body = ChatCompletionRequest(
+                model: directModelName,
+                messages: [
+                    ChatMessage(role: "system", content: systemPrompt),
+                    ChatMessage(role: "user", content: userMessage)
+                ],
+                temperature: DisputePrompt.temperature,
+                max_tokens: DisputePrompt.maxOutputTokens
+            )
+            request.httpBody = try JSONEncoder().encode(body)
+
+            let (data, response) = try await send(request)
+            try validate(response: response)
+            let decoded = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
+            guard let choice = decoded.choices?.first else {
+                if let message = decoded.error?.message { throw AppError.malformedAIResponse(message) }
+                throw AppError.malformedAIResponse("响应缺少 choices")
+            }
+            guard let content = choice.message?.content, !content.isEmpty else {
+                if let message = decoded.error?.message { throw AppError.malformedAIResponse(message) }
+                // 空正文且被截断，几乎一定是 reasoning 吃光了预算
+                if choice.finish_reason == "length" {
+                    throw AppError.malformedAIResponse("模型思考过程用尽了输出预算，正文为空")
+                }
+                throw AppError.malformedAIResponse("响应缺少 content")
+            }
+            // 截断的 JSON 必然解析失败，但**失败的表述必须指向真实原因**。
+            // 说"格式漂移"会让人去查提示词，而真正的修法是提高 max_tokens。
+            if choice.finish_reason == "length" {
+                throw AppError.malformedAIResponse("模型输出被长度上限截断（正文 \(content.count) 字）")
+            }
+            return content
         }
-        
-        throw AIServiceError.invalidResponse
     }
-    
-    // MARK: - Private Methods - 备用逻辑
-    
-    private func calculateAverageScore(from sessions: [RecordingSession]) -> Int {
-        guard !sessions.isEmpty else { return 75 }
-        
-        let total = sessions.reduce(0) { $0 + Int($1.analysisResult?.emotionScore ?? 75) }
-        return min(100, max(0, total / sessions.count))
-    }
-    
-    private func relationshipTypeText(_ type: String) -> String {
-        switch type {
-        case "partner": return "伴侣"
-        case "spouse": return "配偶"
-        case "family": return "家人"
-        case "friend": return "朋友"
-        case "colleague": return "同事"
-        default: return "其他"
+
+    // MARK: 请求实现
+
+    /// 快速工具生成（吵架复盘 / 话术急救 / 道歉生成 / 关系体检）。
+    /// 修复报告 E2：这些工具原先全部返回硬编码模板，与用户输入几乎无关。
+    func quickTool(kind: QuickToolKind, input: String) async throws -> String {
+        guard !isAnalyzing else { throw AppError.busy }
+        guard !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AppError.emptyTranscription
+        }
+        guard mode.isAvailable else { throw AppError.aiNotConfigured }
+        guard !quotaPolicy.isExhausted(used: usedToday) else { throw AppError.quotaExceeded }
+
+        isAnalyzing = true
+        lastError = nil
+        defer { isAnalyzing = false }
+
+        do {
+            let text = try await performAssist(kind: kind, input: input)
+            consumeQuota()
+            return text
+        } catch let error as AppError {
+            lastError = error
+            throw error
+        } catch {
+            let mapped = AppError.fromNetwork(error)
+            lastError = mapped
+            throw mapped
         }
     }
-    
-    private func generateSummary(score: Int, profile: Profile) -> String {
-        let relationshipWord = relationshipTypeText(profile.relationshipType)
-        
-        if score >= 85 {
-            return "与\(profile.name)的\(relationshipWord)关系非常健康。"
-        } else if score >= 70 {
-            return "与\(profile.name)的\(relationshipWord)关系总体良好。"
-        } else if score >= 60 {
-            return "与\(profile.name)的\(relationshipWord)关系需要更多关注。"
-        } else {
-            return "与\(profile.name)的\(relationshipWord)关系需要改善。"
+
+    private func performAssist(kind: QuickToolKind, input: String) async throws -> String {        switch mode {
+        case .unconfigured:
+            throw AppError.aiNotConfigured
+
+        case .proxy(let baseURL):
+            var request = URLRequest(url: baseURL.appending(path: "v1/assist"))
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(
+                AssistRequest(tool: kind.rawValue, input: input)
+            )
+            let (data, response) = try await send(request)
+            try validate(response: response)
+
+            if let envelope = try? JSONDecoder().decode(AssistEnvelope.self, from: data) {
+                if let text = envelope.text, !text.isEmpty { return text }
+                if let content = envelope.choices?.first?.message?.content, !content.isEmpty {
+                    return content
+                }
+                if let message = envelope.error?.message {
+                    throw AppError.malformedAIResponse(message)
+                }
+            }
+            throw AppError.malformedAIResponse("响应结构无法识别")
+
+        case .direct(let baseURL, let apiKey):
+            var request = URLRequest(url: baseURL)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            let body = ChatCompletionRequest(
+                model: directModelName,
+                messages: [
+                    ChatMessage(role: "system", content: kind.systemPrompt),
+                    ChatMessage(role: "user", content: input)
+                ],
+                temperature: 0.5,
+                max_tokens: 900
+            )
+            request.httpBody = try JSONEncoder().encode(body)
+
+            let (data, response) = try await send(request)
+            try validate(response: response)
+            let decoded = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
+            guard let content = decoded.choices?.first?.message?.content, !content.isEmpty else {
+                if let message = decoded.error?.message {
+                    throw AppError.malformedAIResponse(message)
+                }
+                throw AppError.malformedAIResponse("响应缺少 content")
+            }
+            return content
         }
     }
-    
-    private func generateStrengths(profile: Profile) -> [String] {
-        switch profile.relationshipType {
-        case "partner", "spouse":
-            return ["相互尊重", "愿意付出", "沟通理性"]
-        case "family":
-            return ["天然信任", "相互支持"]
-        case "friend":
-            return ["真诚相待", "志趣相投"]
-        case "colleague":
-            return ["专业配合", "相互尊重"]
+
+    private func performRequest(
+        conversation: String,
+        counterpartName: String,
+        relationshipType: RelationshipType
+    ) async throws -> ParsedAnalysis {
+        switch mode {
+        case .proxy(let baseURL):
+            return try await performProxyRequest(
+                baseURL: baseURL,
+                conversation: conversation,
+                counterpartName: counterpartName,
+                relationshipType: relationshipType
+            )
+        case .direct(let baseURL, let apiKey):
+            return try await performDirectRequest(
+                baseURL: baseURL,
+                apiKey: apiKey,
+                conversation: conversation,
+                counterpartName: counterpartName,
+                relationshipType: relationshipType
+            )
+        case .unconfigured:
+            throw AppError.aiNotConfigured
+        }
+    }
+
+    private func performProxyRequest(
+        baseURL: URL,
+        conversation: String,
+        counterpartName: String,
+        relationshipType: RelationshipType
+    ) async throws -> ParsedAnalysis {
+        var request = URLRequest(url: baseURL.appending(path: "v1/relationship/analyze"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            ProxyAnalyzeRequest(
+                conversation: conversation,
+                counterpartName: counterpartName,
+                relationshipType: relationshipType.rawValue
+            )
+        )
+
+        let (data, response) = try await send(request)
+        try validate(response: response)
+
+        let decoder = JSONDecoder()
+        let envelope = try? decoder.decode(ProxyEnvelope.self, from: data)
+
+        if let payload = envelope?.analysis {
+            let parsed = ParsedAnalysis(
+                score: payload.score,
+                summary: payload.summary,
+                strengths: payload.strengths ?? [],
+                improvements: payload.improvements ?? [],
+                suggestions: payload.suggestions ?? [],
+                emotionalTrend: payload.emotionalTrend,
+                communicationQuality: payload.communicationQuality
+            )
+            guard parsed.hasUsableContent else { throw AppError.malformedAIResponse("字段为空") }
+            return parsed
+        }
+
+        // 兼容 OpenAI Chat Completions 形态
+        if let content = envelope?.choices?.first?.message?.content {
+            return try AIResponseParser.parse(content)
+        }
+        if let message = envelope?.error?.message {
+            throw AppError.malformedAIResponse(message)
+        }
+        throw AppError.malformedAIResponse("响应结构无法识别")
+    }
+
+    private func performDirectRequest(
+        baseURL: URL,
+        apiKey: String,
+        conversation: String,
+        counterpartName: String,
+        relationshipType: RelationshipType
+    ) async throws -> ParsedAnalysis {
+        var request = URLRequest(url: baseURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // 密钥来自 Keychain（开发者手动写入），源码中不存在任何字面量
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+
+        let body = ChatCompletionRequest(
+            model: directModelName,
+            messages: [
+                ChatMessage(role: "system", content: Self.systemPrompt),
+                ChatMessage(
+                    role: "user",
+                    content: """
+                    请分析以下\(relationshipType.displayName)关系中的对话内容。
+                    对方姓名：\(counterpartName)
+                    对话内容：
+                    \(conversation)
+                    """
+                )
+            ],
+            // 报告 N1 的验证要求：同一段对话重复分析应给出语义一致的结果，
+            // 因此把 temperature 从 0.7 降到 0.4。
+            temperature: 0.4,
+            max_tokens: 1200
+        )
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (data, response) = try await send(request)
+        try validate(response: response)
+
+        let decoded = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
+        guard let content = decoded.choices?.first?.message?.content else {
+            if let message = decoded.error?.message {
+                throw AppError.malformedAIResponse(message)
+            }
+            throw AppError.malformedAIResponse("响应缺少 content")
+        }
+        return try AIResponseParser.parse(content)
+    }
+
+    /// 发送请求，对超时与瞬时网络错误做一次重试。
+    private func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        // 代理模式下统一补上共享令牌。
+        //
+        // 放在这一个地方而不是每个 case 里各写一遍：三处代理请求各写一次的话，
+        // 以后新增端点必然漏写一处，而漏掉的表现是 401「未授权」——
+        // 看起来像服务端坏了，其实是客户端少了个头。
+        //
+        // 直连模式不需要：那条路用的是 `Authorization: Bearer <模型厂商密钥>`。
+        var request = request
+        if case .proxy = mode, request.value(forHTTPHeaderField: Self.proxyTokenHeader) == nil {
+            if let token = proxyToken, !token.isEmpty {
+                request.setValue(token, forHTTPHeaderField: Self.proxyTokenHeader)
+            }
+        }
+
+        do {
+            return try await session.data(for: request)
+        } catch let error as URLError where error.code == .timedOut || error.code == .networkConnectionLost {
+            AppLog.ai.warning("Retrying after \(error.code.rawValue, privacy: .public)")
+            try await Task.sleep(nanoseconds: 600_000_000)
+            return try await session.data(for: request)
+        }
+    }
+
+    private func validate(response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw AppError.serverError(-1)
+        }
+        switch http.statusCode {
+        case 200...299:
+            return
+        case 401, 403:
+            throw AppError.unauthorized
+        case 429:
+            throw AppError.quotaExceeded
         default:
-            return ["保持真诚"]
+            throw AppError.serverError(http.statusCode)
         }
     }
-    
-    private func generateImprovements(score: Int) -> [String] {
-        if score >= 70 {
-            return ["增加日常互动", "多表达感激"]
-        } else {
-            return ["建立稳定沟通", "学会倾听", "增加相处时间"]
-        }
-    }
-    
-    private func generateSuggestions(profile: Profile, score: Int) -> [String] {
-        var suggestions: [String] = []
-        
-        if score < 70 {
-            suggestions.append("安排一次深入交流，坦诚分享感受")
-        }
-        
-        if profile.relationshipType == "partner" || profile.relationshipType == "spouse" {
-            suggestions.append("可以一起看部电影或共进晚餐")
-        }
-        
-        suggestions.append("在重要日子给予特别关注")
-        return suggestions
-    }
-    
-    // MARK: - Quota Management
-    
+
+    // MARK: 配额
+
     private func checkAndResetDailyQuota() {
         let today = Calendar.current.startOfDay(for: Date())
-        if let lastDate = userDefaults.object(forKey: dateKey) as? Date {
-            let lastDay = Calendar.current.startOfDay(for: lastDate)
-            if lastDay < today {
-                usedToday = 0
-            } else {
-                usedToday = userDefaults.integer(forKey: usedKey)
-            }
+        let last = defaults.object(forKey: Keys.lastDay) as? Date
+        if QuotaPolicy.shouldReset(lastResetDay: last, today: today) {
+            usedToday = 0
+            persistQuota()
+        } else {
+            usedToday = max(0, defaults.integer(forKey: Keys.used))
         }
-        dailyQuota = 10
     }
-    
-    private func saveUsage() {
-        userDefaults.set(usedToday, forKey: usedKey)
-        userDefaults.set(Date(), forKey: dateKey)
+
+    private func consumeQuota() {
+        usedToday += 1
+        persistQuota()
     }
+
+    private func persistQuota() {
+        defaults.set(usedToday, forKey: Keys.used)
+        defaults.set(Calendar.current.startOfDay(for: Date()), forKey: Keys.lastDay)
+    }
+
+    // MARK: 提示词
+
+    private static let systemPrompt = """
+    你是一个专业的情感关系分析师，擅长分析情侣、夫妻、家人、朋友之间的对话和互动，给出关系健康度评分和改进建议。
+
+    请根据用户提供的对话内容或关系信息，从以下维度进行分析：
+    1. 沟通质量 - 双方是否有效表达感受和需求
+    2. 情感连接 - 是否有情感支持和共鸣
+    3. 冲突处理 - 遇到分歧时如何解决
+    4. 表达方式 - 语言是否温和、有爱
+    5. 总体氛围 - 关系是轻松还是紧张
+
+    请以 JSON 格式返回分析结果，字段如下：
+    {
+        "score": 85,
+        "summary": "简要总结（50字以内）",
+        "strengths": ["优点1", "优点2"],
+        "improvements": ["改进点1", "改进点2"],
+        "suggestions": ["具体建议1", "具体建议2"],
+        "emotionalTrend": "上升/下降/稳定",
+        "communicationQuality": "优秀/良好/一般/需要改善"
+    }
+
+    注意：
+    - score 为 0-100 的整数，必须基于对话内容判断；如果对话内容不足以判断，请省略 score 字段而不是编造。
+    - 只返回 JSON，不要有其他文字。
+    """
 }

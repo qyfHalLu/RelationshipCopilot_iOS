@@ -1,301 +1,336 @@
 import SwiftUI
 import UIKit
 
-// MARK: - 快速工具视图
+// MARK: - 快速工具
+//
+// 修复报告 A2 / E2 / C5：
+//  - 原实现 4 个工具全部返回**硬编码字符串**：`generateResponse()` 在固定 2 秒延时后
+//    调用 `generateAIResponse()`，后者是一段与输入无关的常量文本；
+//    「关系体检」对任何人都输出"综合评分：72/100"。
+//  - 原 `QuickToolsView` 自带 `NavigationStack`，同时被塞进 tab 与首页 ScrollView，
+//    形成 NavigationStack 嵌套。现在它是被 push 的普通页面。
+//  - AI 不可用时给出**明确标注为「通用参考」**的离线内容，不伪装成 AI 结果。
+
 struct QuickToolsView: View {
-    @State private var selectedTool: QuickTool?
-    @State private var showToolSheet = false
-    
-    let tools: [QuickTool] = [
-        QuickTool(id: "conflict", title: "吵架复盘", icon: "bubble.left.and.bubble.right.fill", color: .purple, description: "分析吵架原因，提供解决方案"),
-        QuickTool(id: "phrase", title: "话术急救", icon: "bandage.fill", color: .blue, description: "提供高情商聊天话术"),
-        QuickTool(id: "apology", title: "道歉生成", icon: "envelope.fill", color: .green, description: "生成真诚的道歉文案"),
-        QuickTool(id: "checkup", title: "关系体检", icon: "heart.text.fill", color: .red, description: "评估关系健康状态")
-    ]
-    
+
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: ThemeManager.Spacing.md) {
-                    ForEach(tools) { tool in
-                        QuickToolCard(tool: tool) {
-                            selectedTool = tool
-                            showToolSheet = true
-                        }
+        ScrollView {
+            VStack(spacing: ThemeManager.Spacing.md) {
+                Text("选一个当下最需要的")
+                    .font(ThemeManager.Typography.subheadline)
+                    .foregroundStyle(ThemeManager.Colors.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                ForEach(QuickToolKind.allCases) { tool in
+                    // 用「直接给目标视图」的 NavigationLink，不用 `NavigationLink(value:)`。
+                    //
+                    // ## 这里曾经整个模块都点不动
+                    //
+                    // 原实现是 `NavigationLink(value: tool)` + `.navigationDestination(for:)`
+                    // 配一个 `@State path`。但那个 `path` **从来没绑定到任何 NavigationStack**
+                    // （本页是被外层 push 的普通页面，自己没有 Stack），
+                    // 于是：点首页四宫格 → 停在列表页；再点列表项 → 仍然停在列表页。
+                    //
+                    // 实测证据（XCUITest 打印）：
+                    //   点格子后导航栏仍是「快速工具」
+                    //   点列表行后导航栏仍是「快速工具」、详情页占位符不存在
+                    // 也就是说**四个工具一个都进不去**，整个功能是死的。
+                    //
+                    // 直接给目标视图不依赖任何路径注册，是这里最可靠的写法。
+                    NavigationLink {
+                        QuickToolDestination(kind: tool)
+                    } label: {
+                        toolRow(tool)
                     }
+                    .buttonStyle(.plain)
                 }
-                .padding(ThemeManager.Spacing.md)
-            }
-            .background(ThemeManager.Colors.background)
-            .navigationTitle("快速工具")
-            .sheet(isPresented: $showToolSheet) {
-                if let tool = selectedTool {
-                    QuickToolDetailView(tool: tool)
+
+                if !AIService.shared.isConfigured {
+                    noticeCard
                 }
             }
+            .padding(ThemeManager.Spacing.md)
         }
+        .background(ThemeManager.Colors.background)
+        .navigationTitle("快速工具")
+        .navigationBarTitleDisplayMode(.large)
     }
-}
 
-// MARK: - 工具数据模型
-struct QuickTool: Identifiable {
-    let id: String
-    let title: String
-    let icon: String
-    let color: Color
-    let description: String
-}
+    private func toolRow(_ tool: QuickToolKind) -> some View {
+        HStack(spacing: ThemeManager.Spacing.md) {
+            Image(systemName: tool.icon)
+                .font(.title3)
+                .foregroundStyle(ThemeManager.Colors.primary)
+                .frame(width: 44, height: 44)
+                .background(ThemeManager.Colors.primary.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md, style: .continuous))
 
-// MARK: - 工具卡片
-struct QuickToolCard: View {
-    let tool: QuickTool
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
-                Image(systemName: tool.icon)
-                    .font(.title)
-                    .foregroundColor(tool.color)
-                
+            VStack(alignment: .leading, spacing: 3) {
                 Text(tool.title)
                     .font(ThemeManager.Typography.headline)
-                    .foregroundColor(ThemeManager.Colors.textPrimary)
-                
-                Text(tool.description)
+                    .foregroundStyle(ThemeManager.Colors.textPrimary)
+                Text(tool.detail)
                     .font(ThemeManager.Typography.caption)
-                    .foregroundColor(ThemeManager.Colors.textSecondary)
-                    .lineLimit(2)
+                    .foregroundStyle(ThemeManager.Colors.textSecondary)
+                    .multilineTextAlignment(.leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(ThemeManager.Spacing.md)
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.lg))
-            .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.caption2)
+                .foregroundStyle(ThemeManager.Colors.textSecondary)
         }
-        .buttonStyle(PlainButtonStyle())
+        .padding(ThemeManager.Spacing.md)
+        .surfaceCard(cornerRadius: ThemeManager.Radius.md)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("打开\(tool.title)")
+    }
+
+    private var noticeCard: some View {
+        HStack(alignment: .top, spacing: ThemeManager.Spacing.sm) {
+            Image(systemName: "info.circle")
+                .foregroundStyle(ThemeManager.Colors.accent)
+            Text("当前构建未接入 AI 服务，工具会展示通用参考内容，不会生成个性化建议。")
+                .font(ThemeManager.Typography.caption)
+                .foregroundStyle(ThemeManager.Colors.textSecondary)
+        }
+        .padding(ThemeManager.Spacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ThemeManager.Colors.accent.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md, style: .continuous))
     }
 }
 
-// MARK: - 工具详情视图
+// MARK: - 工具详情
+
 struct QuickToolDetailView: View {
-    let tool: QuickTool
-    @Environment(\.dismiss) private var dismiss
-    @State private var userInput: String = ""
-    @State private var aiResponse: String = ""
-    @State private var isLoading = false
-    @State private var hasGenerated = false
-    
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: ThemeManager.Spacing.lg) {
-                    // 工具标题
-                    HStack {
-                        Image(systemName: tool.icon)
-                            .font(.title)
-                            .foregroundColor(tool.color)
-                        Text(tool.title)
-                            .font(ThemeManager.Typography.title2)
-                            .foregroundColor(ThemeManager.Colors.textPrimary)
-                    }
-                    
-                    // 输入区域
-                    VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
-                        Text(inputPrompt)
-                            .font(ThemeManager.Typography.subheadline)
-                            .foregroundColor(ThemeManager.Colors.textSecondary)
-                        
-                        TextEditor(text: $userInput)
-                            .frame(minHeight: 120)
-                            .padding(ThemeManager.Spacing.sm)
-                            .background(Color.white)
-                            .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: ThemeManager.Radius.md)
-                                    .stroke(ThemeManager.Colors.border, lineWidth: 1)
-                            )
-                    }
-                    
-                    // 生成按钮
-                    Button(action: generateResponse) {
-                        HStack {
-                            if isLoading {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            }
-                            Text(isLoading ? "生成中..." : "生成")
-                        }
-                        .font(ThemeManager.Typography.headline)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                        .background(
-                            LinearGradient(
-                                colors: [tool.color, tool.color.opacity(0.8)],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
-                    }
-                    .disabled(userInput.isEmpty || isLoading)
-                    .opacity(userInput.isEmpty ? 0.6 : 1)
-                    
-                    // AI回复
-                    if hasGenerated {
-                        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
-                            Text("AI回复")
-                                .font(ThemeManager.Typography.subheadline)
-                                .foregroundColor(ThemeManager.Colors.textSecondary)
-                            
-                            Text(aiResponse)
-                                .font(ThemeManager.Typography.body)
-                                .foregroundColor(ThemeManager.Colors.textPrimary)
-                                .padding(ThemeManager.Spacing.md)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.white)
-                                .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md))
-                                .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
-                            
-                            // 复制按钮
-                            Button(action: copyToClipboard) {
-                                HStack {
-                                    Image(systemName: "doc.on.doc")
-                                    Text("复制")
-                                }
-                                .font(ThemeManager.Typography.subheadline)
-                                .foregroundColor(tool.color)
-                            }
-                        }
-                    }
-                }
-                .padding(ThemeManager.Spacing.md)
-            }
-            .background(ThemeManager.Colors.background)
-            .navigationTitle("快速工具")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") { dismiss() }
-                }
-            }
-        }
-    }
-    
-    private var inputPrompt: String {
-        switch tool.id {
-        case "conflict": return "请描述吵架的经过（什么时候，因为什么吵架，双方说了什么）"
-        case "phrase": return "请描述当前面临的沟通场景（如：对方心情不好/想表白/要拒绝）"
-        case "apology": return "请描述需要道歉的事情经过"
-        case "checkup": return "请描述你们最近的相处情况（沟通频率、是否吵架等）"
-        default: return "请输入内容"
-        }
-    }
-    
-    private func generateResponse() {
-        isLoading = true
-        hasGenerated = false
-        
-        // 模拟AI生成
-        Task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            
-            await MainActor.run {
-                aiResponse = generateAIResponse()
-                isLoading = false
-                hasGenerated = true
-            }
-        }
-    }
-    
-    private func generateAIResponse() -> String {
-        switch tool.id {
-        case "conflict":
-            return """
-            吵架分析报告：
-            
-            1. 冲突根源：从你的描述来看，主要分歧在于「\(userInput.prefix(20))...」
-            
-            2. 问题分析：
-            - 沟通方式：双方可能都带有情绪，应该等冷静后再沟通
-            - 表达方式：建议使用「我感受」而不是「你总是」
-            
-            3. 建议解决方案：
-            - 步骤一：双方先冷静10分钟
-            - 步骤二：轮流陈述事实，不评价对错
-            - 步骤三：表达自己的感受和需求
-            - 步骤四：共同寻找双赢方案
-            
-            4. 后续建议：约定以后遇到分歧时，先冷静再沟通。
-            """
-            
-        case "phrase":
-            return """
-            建议话术：
-            
-            当对方心情不好时：
-            - 「我注意到你今天不太开心，发生什么事了吗？我想听听」
-            - 「不管发生什么，我都在你身边」
-            
-            想表白时：
-            - 「最近和你在一起的时光都很开心，我想认真告诉你...」
-            - 「我有很重要的话想对你说...」
-            
-            需要拒绝时：
-            - 「我理解你的想法，但是...」
-            - 「谢谢你的好意，不过...」
-            """
-            
-        case "apology":
-            return """
-            道歉文案模板：
-            
-            亲爱的[名字]，
-            
-            我深刻反思了自己的行为，意识到这件事让你感到[具体感受]。
-            
-            发生这样的事，我很自责。让我明白了我在[某方面]做得不够好。
-            
-            我真心请求你的原谅。我保证以后会[具体承诺]。
-            
-            虽然现在可能很难立刻恢复，但我会用行动证明我的改变。
-            
-            爱你的人
-            """
-            
-        case "checkup":
-            return """
-            关系健康评估报告：
-            
-            基于你的描述，我给出以下评估：
-            
-            ▸ 沟通质量：★★☆☆☆
-            建议：每天至少30分钟深度交流
-            
-            ▸ 情感表达：★★★☆☆
-            建议：多表达感恩和欣赏
-            
-            ▸ 冲突处理：★★☆☆☆
-            建议：学习非暴力沟通技巧
-            
-            ▸ 亲密度：★★★☆☆
-            建议：每周安排一次约会/共同活动
-            
-            综合评分：72/100
-            建议：需要更多高质量的沟通
-            """
-            
-        default:
-            return "功能开发中..."
-        }
-    }
-    
-    private func copyToClipboard() {
-        UIPasteboard.general.string = aiResponse
-    }
-}
+    let tool: QuickToolKind
 
-#Preview {
-    QuickToolsView()
+    @State private var input = ""
+    @State private var output: String?
+    @State private var isAIGenerated = false
+    @State private var isLoading = false
+    @State private var error: AppError?
+    @State private var copied = false
+
+    @FocusState private var editorFocused: Bool
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: ThemeManager.Spacing.lg) {
+                VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+                    Text(tool.inputPrompt)
+                        .font(ThemeManager.Typography.subheadline)
+                        .foregroundStyle(ThemeManager.Colors.textSecondary)
+
+                    TextEditor(text: $input)
+                        .font(ThemeManager.Typography.body)
+                        .focused($editorFocused)
+                        .frame(minHeight: 130)
+                        .scrollContentBackground(.hidden)
+                        .padding(ThemeManager.Spacing.sm)
+                        .background(ThemeManager.Colors.surfaceElevated)
+                        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md, style: .continuous))
+                        .overlay(alignment: .topLeading) {
+                            if input.isEmpty {
+                                Text("在这里描述…")
+                                    .font(ThemeManager.Typography.body)
+                                    .foregroundStyle(ThemeManager.Colors.textSecondary.opacity(0.7))
+                                    .padding(.horizontal, ThemeManager.Spacing.md)
+                                    .padding(.vertical, ThemeManager.Spacing.md)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                        .accessibilityLabel(tool.inputPrompt)
+
+                    // 语音输入。
+                    //
+                    // 这些工具的输入动辄上百字（"刚才发生了什么"、"你做错了什么"），
+                    // 用键盘敲完再点生成，多数人会中途放弃、只写两句 ——
+                    // 而输入太短，模型就只能给通用建议，工具也就废了。
+                    // 说比打字快得多，这是让工具真正可用的前提。
+                    HStack(spacing: ThemeManager.Spacing.sm) {
+                        VoiceInputButton(text: $input, subject: tool.inputPrompt)
+                        Text(input.isEmpty ? "也可以按住说话，自动转成文字" : "\(input.count) 字")
+                            .font(ThemeManager.Typography.caption)
+                            .foregroundStyle(ThemeManager.Colors.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }
+                }
+
+                generateButton
+
+                if let error, error.isBlocking {
+                    errorCard(error)
+                }
+
+                if let output {
+                    outputCard(output)
+                }
+            }
+            .padding(ThemeManager.Spacing.md)
+        }
+        .background(ThemeManager.Colors.background)
+        .navigationTitle(tool.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .scrollDismissesKeyboard(.interactively)
+        .onAppear {
+            if output == nil { editorFocused = true }
+        }
+    }
+
+    private var generateButton: some View {
+        Button {
+            Task { await generate() }
+        } label: {
+            HStack(spacing: ThemeManager.Spacing.sm) {
+                if isLoading { ProgressView().tint(.white) }
+                Text(isLoading ? "生成中…" : (output == nil ? "生成" : "重新生成"))
+                    .font(ThemeManager.Typography.headline)
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .background(
+                LinearGradient(
+                    colors: [ThemeManager.Colors.gradientStart, ThemeManager.Colors.gradientEnd],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md, style: .continuous))
+            .opacity(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1)
+        }
+        .buttonStyle(PressableStyle())
+        .disabled(isLoading || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    private func outputCard(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+            HStack {
+                Text(isAIGenerated ? "AI 生成" : "通用参考")
+                    .font(ThemeManager.Typography.caption)
+                    .foregroundStyle(isAIGenerated
+                                     ? ThemeManager.Colors.secondary
+                                     : ThemeManager.Colors.accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background((isAIGenerated
+                                 ? ThemeManager.Colors.secondary
+                                 : ThemeManager.Colors.accent).opacity(0.12))
+                    .clipShape(Capsule())
+
+                Spacer()
+
+                Button {
+                    UIPasteboard.general.string = text
+                    copied = true
+                    Task {
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        copied = false
+                    }
+                } label: {
+                    // 不叫「复制」：这个名字暗示"拿走直接用"，
+                    // 而这类工具的产出一开始就不是给你直接用的。
+                    Label(copied ? "已存下" : (tool.requiresOwnWords ? "存下来改" : "复制"),
+                          systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .font(ThemeManager.Typography.caption)
+                }
+            }
+
+            Text(text)
+                .font(ThemeManager.Typography.callout)
+                .foregroundStyle(ThemeManager.Colors.textPrimary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // 「改成你自己的话」这条约束**必须由代码写死，不能靠模型自觉**。
+            //
+            // 理由：这类工具最容易的失败方式，是用户把生成的东西原样发出去，
+            // 被对方看出是 AI 写的 —— 那比一开始说不出口更糟，
+            // 因为它把"我说不好"变成了"我不愿意自己说"。
+            // 模型的提示词里虽然写了，但模型可能不写、可能写得很轻，
+            // 而这条提醒是产品立场，不能交给概率。
+            if tool.requiresOwnWords {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "pencil.line")
+                        .font(.caption2)
+                    Text("上面这些是帮你理清思路的，不是让你照念的。发之前用你自己的话改一遍——对方要的是你的话，不是漂亮的话。")
+                        .font(.caption2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .foregroundStyle(ThemeManager.Colors.accent)
+                .padding(.top, 2)
+            }
+
+            if isAIGenerated {
+                Text("内容由 AI 生成，仅供参考，不构成专业建议。")
+                    .font(.caption2)
+                    .foregroundStyle(ThemeManager.Colors.textSecondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .surfaceCard(padding: ThemeManager.Spacing.md)
+    }
+
+    private func errorCard(_ error: AppError) -> some View {
+        VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
+            Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+                .font(ThemeManager.Typography.subheadline)
+                .foregroundStyle(ThemeManager.Colors.danger)
+            switch error.recovery {
+            case .retry:
+                Button("重试") { Task { await generate() } }
+                    .font(ThemeManager.Typography.subheadline)
+            case .openSettings:
+                Button("去设置") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                .font(ThemeManager.Typography.subheadline)
+            default:
+                EmptyView()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(ThemeManager.Spacing.md)
+        .background(ThemeManager.Colors.danger.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md, style: .continuous))
+    }
+
+    private func generate() async {
+        isLoading = true
+        error = nil
+        defer { isLoading = false }
+        editorFocused = false
+
+        do {
+            let text = try await AIService.shared.quickTool(kind: tool, input: input)
+            apply(.generated(text))
+            Telemetry.shared.track(.quickToolOpened)
+        } catch let appError as AppError {
+            apply(AssistFallback.outcome(for: appError, tool: tool))
+        } catch {
+            // 走到这里的是非 AppError（不该发生），当未知故障处理。
+            apply(.failed(.serverError(-1)))
+        }
+    }
+
+    /// 把决策结果落到界面上。
+    ///
+    /// 决策本身在 `AssistFallback.outcome(for:tool:)` 里 —— 那是纯函数、有单测。
+    /// 这里只负责赋值，不承担任何判断。
+    private func apply(_ outcome: AssistFallback.Outcome) {
+        // 空字符串要落成 nil。下面的 `if let output` 只判空值不判空串，
+        // 落成 "" 会渲染出一张没有任何文字的空白卡片。
+        let text = outcome.text ?? ""
+        output = text.isEmpty ? nil : text
+        isAIGenerated = outcome.isAIGenerated
+        if case .failed(let appError) = outcome {
+            error = appError
+        }
+    }
 }
