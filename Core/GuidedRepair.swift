@@ -18,7 +18,7 @@
 //  ## 这个文件的核心不是"提问"，是"拦截"
 //
 //  多数人写道歉时，自我辩护在动笔那一刻就完成了：
-//  "我承认我不该发火，但他先……"
+//  "我承认我不该发火，但 TA 先……"
 //  之后无论看到什么，都只是在跟一个已经闭合的结论商量。
 //  所以这里做的是把辩解**识别出来并挪位置**，而不是删掉它 ——
 //  人对"被禁止"会反抗，对"被重新安排"不会。
@@ -50,9 +50,9 @@ enum RepairStep: Int, CaseIterable, Identifiable {
         case .safety:       return "先问一句"
         case .action:       return "只写动作"
         case .explanation:  return "解释换个位置"
-        case .losses:       return "他失去了什么"
+        case .losses:       return "TA 失去了什么"
         case .perspective:  return "分清关心和猜测"
-        case .repairAction: return "让他能认出来"
+        case .repairAction: return "让 TA 能认出来"
         case .skeleton:     return "用你的话填"
         }
     }
@@ -67,11 +67,11 @@ enum RepairStep: Int, CaseIterable, Identifiable {
         case .explanation:
             return "你刚才的理由，现在可以说。只有一个要求：它不能是在要对方体谅你。"
         case .losses:
-            return "现在换成他。不是「他什么感受」——那个太笼统。是他因此失去了什么。"
+            return "现在换成 TA。不是「TA 什么感受」——那个太笼统。是 TA 因此失去了什么。"
         case .perspective:
             return "写一个假设，然后把它变成一句可以去问的话。"
         case .repairAction:
-            return "最后一件事：他怎么会知道你在修复？不是「你要说什么」，是「他怎么能认出来」。"
+            return "最后一件事：TA 怎么会知道你在修复？不是「你要说什么」，是「TA 怎么能认出来」。"
         case .skeleton:
             return "想清楚了，现在用你自己的话填。不用漂亮，真实比漂亮有用。"
         }
@@ -81,7 +81,7 @@ enum RepairStep: Int, CaseIterable, Identifiable {
     var hint: String? {
         switch self {
         case .safety:       return "这一步决定后面还要不要继续。"
-        case .action:       return "例：我答应了六点去接她，然后跟同事去喝酒了，手机静音，没接她三个电话。"
+        case .action:       return "例：我答应了六点去接 TA，然后跟同事去喝酒了，手机静音，没接 TA 三个电话。"
         case .explanation:  return "试金石：读一遍，如果听起来像「所以你也不该太怪我」，那就还没到位。"
         case .losses:       return "写不出来的就空着。空着比编好。"
         case .perspective:  return "不能用「你是不是觉得……」，那是把答案塞给对方。"
@@ -120,7 +120,7 @@ enum RepairStep: Int, CaseIterable, Identifiable {
         case .perspective:
             return RepairTheory(
                 source: "Batson 等, 1997 · Hodges & Klein, 2001 · Eyal & Epley, 2010",
-                claim: "「如果我是他」会带出个人痛苦，反而更容易防御；「他是什么感受」才会带出关心。但关心提升不等于判断变准 —— 多组研究都发现，观点采择能提高共情，却几乎不提高推断对方想法的准确度。",
+                claim: "「如果我是 TA」会带出个人痛苦，反而更容易防御；「TA 是什么感受」才会带出关心。但关心提升不等于判断变准 —— 多组研究都发现，观点采择能提高共情，却几乎不提高推断对方想法的准确度。",
                 caveat: "前一条有实验支持；「准确度不提升」是若干研究的共同结论，不是绝对定律。"
             )
         case .repairAction:
@@ -185,11 +185,11 @@ struct RepairIssue: Identifiable, Equatable {
 ///
 /// ## 为什么是清单，不是开放提问
 ///
-/// 问「她当时什么感受」，多数人只能写出「很难过」——
+/// 问「TA 当时什么感受」，多数人只能写出「很难过」——
 /// 不是不肯写，是**脑子里没有这个词**。卡住之后他会随便填一个，
 /// 产品就拿到了垃圾输入。
 ///
-/// 七个格子放在眼前就不一样了：他会认出「对，她后来问我是不是她太计较」。
+/// 七个格子放在眼前就不一样了：用户会认出「对，TA 后来问我是不是 TA 太计较」。
 /// 这一句是他自己想起来的 —— 自己想起来的才会改变归因。
 enum LossCell: String, CaseIterable, Identifiable {
     case dignity
@@ -229,12 +229,12 @@ enum LossCell: String, CaseIterable, Identifiable {
     /// 「写到了」的判据。没有判据的输入框等于没有输入框。
     var criterion: String {
         switch self {
-        case .dignity:      return "「她妈在客厅」比「她很难受」具体"
-        case .notYourFault: return "「她后来问我是不是她太计较」"
-        case .safety:       return "「她大概不敢再让我接孩子」"
-        case .beingHeard:   return "「她说到一半我就打断了她」"
+        case .dignity:      return "「TA 妈妈在客厅」比「TA 很难受」具体"
+        case .notYourFault: return "「TA 后来问我是不是 TA 太计较」"
+        case .safety:       return "「TA 大概不敢再让我接孩子」"
+        case .beingHeard:   return "「TA 说到一半我就打断了 TA」"
         case .cost:         return "「没有 —— 这就是问题」也算写到了"
-        case .reparation:   return "具体动作，不是「对她好一点」"
+        case .reparation:   return "具体动作，不是「对 TA 好一点」"
         case .unsaid:       return "允许这里写「我不知道」"
         }
     }
@@ -259,9 +259,21 @@ enum RepairLinter {
     ]
 
     // 把第二个人拉进责任分配。
-    // 「她先」「他先」归在这里而不是上面：它不是解释，是责任转移 ——
+    // 「TA 先」归在这里而不是上面：它不是解释，是责任转移 ——
     // 两者的提示语完全不同，混在一起会让用户觉得产品没听懂他在说什么。
-    private static let blameMarkers = ["你也", "她也", "他也", "她先", "他先", "谁让他", "谁让她"]
+    //
+    // 同时保留「她/他」：产品文案统一用 TA，但**用户手写时不会**。
+    // 这是输入侧检测，要覆盖用户真实会打的字，而不是我们自己规定的写法。
+    // 漏掉「她先」的后果很具体：一句典型的转移责任会被判为通过。
+    //
+    // gender-neutral-scan:off —— 下面是用户输入侧的匹配词表，不是产品文案。
+    // 它必须收录「她/他」的拼法，否则漏检；GenderNeutralCopyTests 会跳过本区块。
+    private static let blameMarkers = [
+        "你也", "她也", "他也", "TA 也",
+        "她先", "他先", "TA 先",
+        "谁让他", "谁让她"
+    ]
+    // gender-neutral-scan:on
 
     // 对方会立刻进入防御的量化词。
     private static let absoluteMarkers = ["总是", "从来", "每次", "老是", "永远"]
@@ -464,7 +476,7 @@ enum RepairLinter {
             issues.append(RepairIssue(
                 kind: .closedQuestion,
                 severity: .blocking,
-                message: "「\(hit)」是封闭式问句 —— 你在让他确认你的猜测。改成开放的：那天你是什么感觉？"
+                message: "「\(hit)」是封闭式问句 —— 你在让 TA 确认你的猜测。改成开放的：那天你是什么感觉？"
             ))
         }
 

@@ -8,9 +8,10 @@ import UIKit
 //  - 原实现在 `private init()` 里直接 `requestAuthorization()`（第 8-10 行），
 //    一旦该服务被首次访问就会在启动瞬间弹权限框——用户还不知道 App 要做什么。
 //    现改为「由调用方在合适的时机显式申请」（创建第一个承诺后）。
-//  - 原 `scheduleAnniversaryReminder` 的重复触发器里带了 `.year` 分量，
-//    `UNCalendarNotificationTrigger(repeats: true)` 匹配到具体年份后不会再触发，
-//    纪念日提醒实际上只会来一次。现改为只取月/日，并改用「下一次纪念日」计算。
+//  - 纪念日提醒已**整体删除**：`Profile.birthday` / `.anniversary` / `.knownSince`
+//    三个字段一并移除。用户不会用这个 App 记生日 —— 他们有日历和专门的应用，
+//    而那些地方的提醒习惯已经沉淀多年。留一个几乎不会用的提醒，只是让
+//    「添加人物」变成填表。该功能此前也从未被任何调用点触发过。
 //  - 原 `content.badge = 1` 但从不清理角标，红点会永久停留。
 //  - 原所有失败只 `print`，用户永远不知道提醒没排上。现统一 `AppLog` + 结果回调。
 //  - 该服务此前**全仓库零引用**，所以"承诺提醒/每日提醒/纪念日提醒"三项功能均未生效。
@@ -121,59 +122,6 @@ final class NotificationService: NSObject {
         cancel(identifier: Self.dailyIdentifier)
     }
 
-    // MARK: - 纪念日提醒
-
-    /// 纪念日提醒：提前 `daysBefore` 天，每年重复。
-    /// 修复：重复触发器不得包含 `.year`，否则只会命中首次那一年的具体日期。
-    func scheduleAnniversaryReminder(profile: Profile, daysBefore: Int = 3) {
-        let identifier = Self.anniversaryIdentifier(for: profile)
-        cancel(identifier: identifier)
-
-        guard let anniversary = profile.anniversary ?? profile.knownSince else { return }
-
-        var calendar = Calendar.current
-        calendar.locale = Locale(identifier: "zh_CN")
-        let anniversaryComponents = calendar.dateComponents([.month, .day], from: anniversary)
-        guard let month = anniversaryComponents.month, let day = anniversaryComponents.day else { return }
-
-        // 计算「下一次提醒日期」用于展示文案（触发器本身按 月/日 每年重复）
-        let today = calendar.startOfDay(for: Date())
-        var target = calendar.date(from: DateComponents(year: calendar.component(.year, from: today), month: month, day: day)) ?? today
-        if target < today {
-            target = calendar.date(byAdding: .year, value: 1, to: target) ?? target
-        }
-        let years = max(0, calendar.dateComponents([.year], from: anniversary, to: target).year ?? 0)
-
-        let content = UNMutableNotificationContent()
-        content.title = "纪念日提醒"
-        content.body = years > 1
-            ? "再过 \(daysBefore) 天是你和 \(profile.name) 的第 \(years) 个纪念日。"
-            : "再过 \(daysBefore) 天是你和 \(profile.name) 的纪念日。"
-        content.sound = .default
-        content.threadIdentifier = "anniversary"
-        content.userInfo = ["profileID": profile.id.uuidString]
-
-        var fire = DateComponents()
-        fire.month = month
-        fire.day = day
-        fire.hour = 10
-        fire.minute = 0
-        // 提前 daysBefore 天：用「日」字段回退，跨月由日历处理
-        if let base = calendar.date(from: DateComponents(year: 2000, month: month, day: day)),
-           let shifted = calendar.date(byAdding: .day, value: -daysBefore, to: base) {
-            let shiftedComponents = calendar.dateComponents([.month, .day], from: shifted)
-            fire.month = shiftedComponents.month
-            fire.day = shiftedComponents.day
-        }
-
-        let trigger = UNCalendarNotificationTrigger(dateMatching: fire, repeats: true)
-        add(identifier: identifier, content: content, trigger: trigger, label: "anniversary")
-    }
-
-    func cancelAnniversaryReminder(for profile: Profile) {
-        cancel(identifier: Self.anniversaryIdentifier(for: profile))
-    }
-
     // MARK: - 复盘回访（支持 N1 的 24 小时回访）
 
     func scheduleReflectionFollowUp(after hours: Int = 24, sessionID: UUID) {
@@ -224,7 +172,6 @@ final class NotificationService: NSObject {
 
     private static let dailyIdentifier = "daily-reminder"
     private static func identifier(for promise: Promise) -> String { "promise-\(promise.id.uuidString)" }
-    private static func anniversaryIdentifier(for profile: Profile) -> String { "anniversary-\(profile.id.uuidString)" }
 
     private func cancel(identifier: String) {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])

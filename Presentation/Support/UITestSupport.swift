@@ -216,17 +216,25 @@ enum UITestSupport {
         if let first = existing.first { return first }
 
         let partner = Profile(name: "小林", relationshipType: RelationshipType.partner.rawValue)
-        partner.birthday = Calendar.current.date(byAdding: .month, value: -8, to: Date())
-        partner.anniversary = Calendar.current.date(byAdding: .year, value: -2, to: Date())
         partner.notes = "喜欢安静地被陪着，不喜欢被追问。"
         partner.setIntimacy(6)
+        // 显式给一个调色板颜色：`AvatarCircle` 在没有 avatar 时走 UUID 哈希派生色，
+        // 那是**随机看起来**的，截图里每次都不一样，没法判断渲染对不对。
+        // 种子里写死颜色，截图才是可复现的。
+        partner.avatar = AvatarStorage.encode(colorHex: AvatarStorage.paletteHex[1])
         context.insert(partner)
 
-        let family = Profile(name: "妈妈", relationshipType: RelationshipType.family.rawValue)
+        // 第二个档案刻意用「其他」+ 自定义关系名：
+        // 这两个新能力（自定义关系名 / 自定义颜色）此前没有任何端到端覆盖，
+        // 而它们恰恰是最容易"存了但没显示"的那类改动 —— 写进去不报错，
+        // 列表页却仍显示「其他」。
+        let family = Profile(name: "妈妈", relationshipType: RelationshipType.other.rawValue)
+        family.customRelationshipName = "母女"
         family.setIntimacy(4)
+        family.avatar = AvatarStorage.encode(colorHex: AvatarStorage.paletteHex[5])
         context.insert(family)
 
-        let promise1 = Promise(content: "这周陪她散步两次", promisor: "user", promisee: "小林")
+        let promise1 = Promise(content: "这周陪 TA 散步两次", promisor: "user", promisee: "小林")
         promise1.profile = partner
         promise1.deadline = Calendar.current.date(byAdding: .day, value: 3, to: Date())
         context.insert(promise1)
@@ -328,8 +336,8 @@ enum UITestSupport {
             newCase.state = .closed
             newCase.verdict = DisputeVerdict(
                 reframe: "（降级）你们各自写的内容如下，没有做归纳。",
-                needA: "我希望她能先问我一句今天怎么样，而不是直接说我又忘了。",
-                needB: "我想他能自己记住这件事，而不是每次都要我提醒才动。",
+                needA: "我希望 TA 能先问我一句今天怎么样，而不是直接说我又忘了。",
+                needB: "我想 TA 能自己记住这件事，而不是每次都要我提醒才动。",
                 stuckPoint: "（降级）这次没有形成共同卡点的判断。",
                 solvability: .solvable,
                 action: nil
@@ -381,21 +389,21 @@ enum UITestSupport {
     private static func sampleVerdict(solvable: Bool) -> DisputeVerdict {
         if solvable {
             return DisputeVerdict(
-                reframe: "你们其实在争两件事。你在争「怎么把问题解决掉」，她在争「有没有人先接住我」。这两件事都有道理，但它们不在同一个频道上，所以谁先开口都像在错位。",
-                needA: "他想被承认是好意的：他给建议是因为在乎，不是因为不耐烦。",
-                needB: "她想被承认的是感受：她要的不是方案，是有人先陪她待一会儿。",
-                stuckPoint: "你们卡在「谁先让步」上。他一开口就是方案，她一沉默就被读成拒绝，于是两个人都觉得对方没在听。",
+                reframe: "你们其实在争两件事。你在争「怎么把问题解决掉」，TA 在争「有没有人先接住我」。这两件事都有道理，但它们不在同一个频道上，所以谁先开口都像在错位。",
+                needA: "TA 想被承认是好意的：TA 给建议是因为在乎，不是因为不耐烦。",
+                needB: "TA 想被承认的是感受：TA 要的不是方案，是有人先陪 TA 待一会儿。",
+                stuckPoint: "你们卡在「谁先让步」上。TA 一开口就是方案，TA 一沉默就被读成拒绝，于是两个人都觉得对方没在听。",
                 solvability: .solvable,
-                action: "这周找一次，她说完之后你先只说一句「那一定很难受」，然后停十秒。不解释、不建议、不追问。"
+                action: "这周找一次，TA 说完之后你先只说一句「那一定很难受」，然后停十秒。不解释、不建议、不追问。"
             )
         }
         return DisputeVerdict(
-            reframe: "你们其实在争两件事。你在争「说了就要有用」，她在争「说了就要被听见」。这两件事都有道理，但它们不在同一个频道上，所以每次都以沉默收场。",
-            needA: "他想被承认是好意的：他急着想办法，是因为见不得她难受。",
-            needB: "她想被承认的是感受：她开口不是求助，是想有人站在她这边。",
-            stuckPoint: "你们卡在节奏上。他需要「有事可做」才安心，她需要「先被接住」才开口，这两种节奏本身没有对错，但撞在一起就都落空。",
+            reframe: "你们其实在争两件事。你在争「说了就要有用」，TA 在争「说了就要被听见」。这两件事都有道理，但它们不在同一个频道上，所以每次都以沉默收场。",
+            needA: "TA 想被承认是好意的：TA 急着想办法，是因为见不得 TA 难受。",
+            needB: "TA 想被承认的是感受：TA 开口不是求助，是想有人站在 TA 这边。",
+            stuckPoint: "你们卡在节奏上。TA 需要「有事可做」才安心，TA 需要「先被接住」才开口，这两种节奏本身没有对错，但撞在一起就都落空。",
             solvability: .perpetual,
-            coexistence: "以后她开口时，先约定一句话：「我现在只想被听，不用给办法。」他说完这句就停；她说完想听建议时，再补一句「你说说看」。"
+            coexistence: "以后 TA 开口时，先约定一句话：「我现在只想被听，不用给办法。」说完这句就停；TA 想听建议时，再补一句「你说说看」。"
         )
     }
 }

@@ -57,7 +57,7 @@ struct RelationshipCopilotApp: App {
         .modelContainer(Self.sharedContainer)
     }
 
-    /// 持久化容器。新增的可选字段（`Profile.note` / `Profile.anniversary` /
+    /// 持久化容器。新增的可选字段（`Profile.note` / `Profile.customRelationshipName` /
     /// `AnalysisResult.emotionalTrend` 等）由 SwiftData 轻量迁移自动处理，存量数据不丢失。
     ///
     /// Schema 与「删除全部数据」共用 `DataEraser.modelTypes` 这一份清单。

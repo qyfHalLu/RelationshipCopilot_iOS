@@ -278,8 +278,13 @@ enum DataExporter {
             let id: String
             let name: String
             let relationshipType: String
-            let birthday: Date?
-            let anniversary: Date?
+            /// 用户在关系选「其他」时自填的名称。没填则为 nil。
+            let customRelationshipName: String?
+            /// 头像。`"color:<hex>"` 或 `"photo:<文件名>"`。
+            ///
+            /// 导出只记形状与引用，不内联图片数据 —— 备份文件应该能当文本看，
+            /// 而且照片本身在沙盒里，要备份图片得单独做一次打包（见 TODO）。
+            let avatar: String?
             let note: String?
             let intimacyScore: Int
             /// 已删除的关系健康度不再导出。它是 `70 + intimacy * 3`，
@@ -390,8 +395,8 @@ enum DataExporter {
                     id: $0.id.uuidString,
                     name: $0.name,
                     relationshipType: $0.relationshipType,
-                    birthday: $0.birthday,
-                    anniversary: $0.anniversary,
+                    customRelationshipName: $0.customRelationshipName,
+                    avatar: $0.avatar,
                     note: $0.note,
                     intimacyScore: $0.intimacyScore,
                     intimacyLabel: $0.intimacyLabel,

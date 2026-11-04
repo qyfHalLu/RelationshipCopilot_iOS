@@ -608,13 +608,25 @@ struct QuickToolsSection: View {
     private func toolTile(
         _ tool: (id: String, title: String, icon: String, color: Color, detail: String)
     ) -> some View {
-        HStack(alignment: .top, spacing: ThemeManager.Spacing.md) {
+        HStack(spacing: ThemeManager.Spacing.sm) {
+            // 图标不再固定占 28pt 宽。
+            //
+            // 原来 `frame(width: 28)` 是为了让三个图标左边缘对齐，但代价是
+            // 窄屏上白白吃掉 28pt 宽度 —— 而这一格的正文只有一行标题加一行说明。
+            // 改成一个紧凑的方形底衬，视觉上更像"工具的标记"，也把宽度还给文字。
             Image(systemName: tool.icon)
-                .font(.title3)
+                .font(.footnote.weight(.semibold))
                 .foregroundStyle(tool.color)
-                .frame(width: 28)
+                .frame(width: 26, height: 26)
+                .background(tool.color.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 2) {
+            // 标题与说明压到同一视觉块里，行距 1pt。
+            //
+            // 原来是 spacing 2 + 两行都用 `.fixedSize(vertical)`，
+            // 在大字号下两块各占一行、各自撑高，格子被撑成方块。
+            // 现在说明行允许被压缩，格子高度跟着内容走。
+            VStack(alignment: .leading, spacing: 1) {
                 Text(tool.title)
                     .font(ThemeManager.Typography.subheadline)
                     .foregroundStyle(ThemeManager.Colors.textPrimary)
@@ -631,8 +643,17 @@ struct QuickToolsSection: View {
                 .font(.caption2)
                 .foregroundStyle(ThemeManager.Colors.textSecondary)
         }
-        .frame(maxWidth: .infinity, minHeight: 64, alignment: .topLeading)
-        .padding(ThemeManager.Spacing.md)
+        // minHeight 从 64 降到 52，上下 padding 从 16 收到 12。
+        //
+        // 64+32=96pt 的总高，而内容实际只有 26pt 图标和两行小字 ——
+        // 大面积留白让三行工具看起来像三张需要认真对待的大卡片，
+        // 而它们其实只是三个快捷入口。压紧后一屏能看全，也更贴合文字量。
+        //
+        // 保留 minHeight 而不是完全去掉：一行标题+一行说明在标准字号下
+        // 约 40pt，给到 52 才有可点击的余量（44pt 是 iOS 的最小触控高度）。
+        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+        .padding(.horizontal, ThemeManager.Spacing.md)
+        .padding(.vertical, ThemeManager.Spacing.sm + 4)
         .surfaceCard(cornerRadius: ThemeManager.Radius.md)
     }
 }
@@ -719,7 +740,7 @@ struct PromiseQuickRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
-            // 大字号下 `lineLimit(2)` 会把承诺截成半个句子（"这周陪她散步…"），
+            // 大字号下 `lineLimit(2)` 会把承诺截成半个句子（"这周陪 TA 散步…"），
             // 而承诺的完整措辞正是这一行唯一的有效信息 —— 截断等于让它失去意义。
             // 改为不限制行数，让文字自然折行。
             ViewThatFits(in: .horizontal) {

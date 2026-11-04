@@ -595,7 +595,7 @@ final class ScreenshotTests: XCTestCase {
         launch(screen: "home", appearance: "dark", anchor: "quickTools", repairPrefill: "losses-filled")
         assertColorScheme("dark", context: "深色七格页")
         openRepairTool()
-        assertRendered("深色七格页", expecting: "现在换成他")
+        assertRendered("深色七格页", expecting: "现在换成 TA")
         capture("16-dark-repair-losses")
     }
 
@@ -666,6 +666,224 @@ final class ScreenshotTests: XCTestCase {
             "超大字号下承诺内容被截断 —— 很可能又是 lineLimit 没去掉"
         )
         capture("15c-xxxl-promises")
+    }
+
+    // MARK: - 关系档案（头像 / 自定义颜色 / 自定义关系名）
+    //
+    // 这一页此前**完全没有截图覆盖**，而本轮改动最大：换了头像组件、
+    // 加了 12 色调色板 + 系统取色器、删了「重要日期」、加了自定义关系名。
+    //
+    // 特别值得记的是：这些改动全是"编译通过、单测通过、界面却是坏的"高危类型 ——
+    // 自定义关系名存进了 `customRelationshipName`，但列表页如果还在读
+    // `relationship.displayName`，用户看到的就是「其他」。数据层测试
+    // （`RelationshipLabelTests`）只能证明字段算对了，证明不了界面用了它。
+
+    func test_profiles_list() throws {
+        launch(screen: "profiles")
+        assertRendered("关系档案列表", expecting: "关系管理")
+
+        // 列表页必须优先显示自定义关系名，而不是「其他」。
+        // 这条能被机器判定，而且正是最容易回归的那一点。
+        XCTAssertTrue(
+            hasText("母女"),
+            "关系档案列表没有显示自定义关系名「母女」——"
+            + "很可能列表页还在读 relationship.displayName"
+        )
+        XCTAssertFalse(
+            hasText("其他"),
+            "关系档案列表出现了「其他」而不是自定义关系名"
+        )
+        capture("20-profiles-list")
+    }
+
+    func test_profiles_edit_hasNoDateFields() throws {
+        launch(screen: "profiles")
+        assertRendered("关系档案列表", expecting: "关系管理")
+
+        // 进第一个档案的详情页。
+        // 注意 `ProfileCard` 用 `.accessibilityElement(children: .combine)`,
+        // 整张卡片是**一个** button，label 是合并后的
+        // 「小林，伴侣，距离近」，所以按人名片段匹配是对的。
+        let firstProfile = app.buttons.containing(
+            NSPredicate(format: "label CONTAINS %@", "小林")
+        ).firstMatch
+        XCTAssertTrue(firstProfile.waitForExistence(timeout: 10), "找不到「小林」这条档案")
+        firstProfile.tap()
+
+        XCTAssertTrue(
+            app.navigationBars["小林"].waitForExistence(timeout: 10),
+            "点进档案后没有进入详情页"
+        )
+
+        // 「重要日期」以及生日/纪念日字段必须彻底消失。
+        // 只删 Model 字段的话界面读不到会编译失败，所以这里守的是
+        // "字段删了、界面标签还留着"这种残留。
+        for gone in ["重要日期", "生日", "纪念日"] {
+            XCTAssertFalse(
+                hasText(gone),
+                "关系详情页仍然出现了「\(gone)」——这个字段本轮已删除"
+            )
+        }
+
+        // 头像编辑入口必须在。用精确文案，避免 hasText("颜色") 之类
+        // 宽泛匹配把「距离感」附近的文字误判成通过。
+        XCTAssertTrue(hasText("换成照片"), "详情页没有照片入口「换成照片」")
+        XCTAssertTrue(hasText("头像颜色"), "详情页没有颜色入口「头像颜色」")
+        capture("21-profile-detail")
+    }
+
+    /// 详情页展开色板后的样子：12 色网格 + 系统取色器。
+    ///
+    /// 色板默认折叠（Form 里放不下 12 个圆），所以**不点开就截不到**。
+    /// 这条用例存在的理由是：色板是本次改动的核心之一，
+    /// 而"折叠后展开是空的"这种错误在折叠状态下完全看不出来。
+    func test_profiles_colorPaletteExpands() throws {
+        launch(screen: "profiles")
+        let firstProfile = app.buttons.containing(
+            NSPredicate(format: "label CONTAINS %@", "小林")
+        ).firstMatch
+        XCTAssertTrue(firstProfile.waitForExistence(timeout: 10), "找不到「小林」这条档案")
+        firstProfile.tap()
+
+        // 颜色入口是一个独立行（label 里含「头像颜色」）。
+        let colorRow = app.buttons.containing(
+            NSPredicate(format: "label CONTAINS %@", "头像颜色")
+        ).firstMatch
+        XCTAssertTrue(colorRow.waitForExistence(timeout: 10), "找不到「头像颜色」入口")
+        colorRow.tap()
+
+        // ## 先证明「真的展开了」，再数数量
+        //
+        // 这一步是补一次真实的假绿：上一版点完直接数 12 个色圆，断言全过，
+        // 而截图显示弹出的是**系统相册**。原因是
+        // ① 两个入口同处一个 Form 行，`PhotosPicker` 抢走了整行点击；
+        // ② XCUITest 的可访问性树**包含被 sheet 盖住的底层元素**，
+        //    于是色圆 `exists` 为真、断言成立，屏幕上却是一张相册。
+        //
+        // 判别方法：色圆必须真的 `isHittable`。被盖住时 exists 真、hittable 假。
+        let swatches = app.buttons.matching(
+            NSPredicate(format: "label == %@", "头像颜色")
+        )
+        XCTAssertTrue(
+            swatches.element(boundBy: 0).waitForExistence(timeout: 10),
+            "展开后没有找到任何色圆 —— 色板根本没展开"
+        )
+        XCTAssertTrue(
+            swatches.element(boundBy: 0).isHittable,
+            "色圆存在但不可点 —— 很可能被弹出的相册 sheet 盖住了"
+        )
+        XCTAssertEqual(
+            swatches.count, 12,
+            "展开后色板应有 12 个颜色，实际 \(swatches.count) 个 —— "
+            + "可能是网格被裁掉或 paletteHex 变了"
+        )
+        XCTAssertTrue(hasText("自定义颜色"), "没有找到系统取色器「自定义颜色」")
+        capture("21b-profile-palette")
+    }
+
+    /// 「添加人物」页里「其他」的自定义名称输入框。
+    ///
+    /// 这条守的是一个具体的产品约束：选了「其他」就必须填名称，
+    /// 否则列表里会出现一串无法区分的「其他」。
+    /// 断言方式是看**保存按钮的可用状态** —— 这是那个约束唯一的外部表现。
+    func test_addProfile_otherRequiresCustomName() throws {
+        launch(screen: "profiles", seed: false)
+
+        let add = app.buttons["添加人物"].firstMatch
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "找不到「添加人物」入口")
+        add.tap()
+
+        let nameField = app.textFields.firstMatch
+        XCTAssertTrue(nameField.waitForExistence(timeout: 10), "找不到姓名输入框")
+        nameField.tap()
+        nameField.typeText("老王")
+
+        let save = app.buttons["保存"]
+        XCTAssertTrue(save.exists, "找不到保存按钮")
+        // 选了非「其他」的类型，只填名字就该能存。
+        XCTAssertTrue(save.isEnabled, "只填了名字，「保存」却不可用")
+
+        // 切到「其他」：此时保存必须被禁用，直到填了自定义名称。
+        // Picker 已从 .segmented 改成 .menu（7 个中文标签在 375pt 下被压成两字）。
+        let picker = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "伴侣")
+        ).firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 10), "找不到关系类型选择器")
+        picker.tap()
+
+        let otherOption = app.buttons["其他"].firstMatch
+        XCTAssertTrue(otherOption.waitForExistence(timeout: 10), "菜单里没有「其他」选项")
+        otherOption.tap()
+
+        XCTAssertFalse(
+            save.isEnabled,
+            "选了「其他」但没填自定义名称，「保存」却是可用的 —— "
+            + "列表里会出现一串无法区分的「其他」"
+        )
+        capture("21c-add-profile-other")
+    }
+
+    func test_profiles_edit_xxxl() throws {
+        launch(screen: "profiles", font: "xxxl")
+        assertFont("xxxl", context: "超大字号关系档案")
+        assertRendered("超大字号关系档案", expecting: "关系管理")
+
+        // ## 这些断言补的是一次真实的假绿
+        //
+        // 上一版这里只有 `hasText("小林")`，它**通过了** —— 而截图里
+        // 「妈妈」被竖排成两行、「有距离」被竖排成一列竖字、「100%」被断成
+        // 「100」+「%」。三种缺陷全都"渲染出来了"，所以基于 exists 的断言
+        // 一个都抓不到。
+        //
+        // 能机器判定的替代方案是**几何**：竖排的字，其高度会远大于宽度。
+        // 单行四个字（如「有距离」）的宽高比通常 > 1.5；一旦竖排就 < 1。
+        // 这不是精确的排版度量，但足以区分"一行字"和"一列字"。
+        //
+        // 两个坑都在这里踩过，所以只在**首屏可见**的元素上断言：
+        //  ① 用通用的 `element(containingLabel:)` 会先命中根容器
+        //     （实测 frame 是整屏 402×874，宽高比 0.46），布局正常也会报红。
+        //  ② XXXL 下第二张卡片会滚出屏幕，`exists` 仍为真但不可见，
+        //     拿它的 frame 没有意义（曾因此报出"找不到「一般」"）。
+        //
+        // 只取排序第一的、确实在屏幕内的那条距离标签即可 ——
+        // 两条卡片用的是同一个 `ProfileCard`，验一条就够。
+        let badgeLabels = ["有距离", "一般", "很近", "疏远"]
+        var checked = 0
+        for label in badgeLabels {
+            let matches = app.staticTexts.containing(
+                NSPredicate(format: "label CONTAINS %@", label)
+            )
+            guard matches.count > 0 else { continue }
+            let el = matches.element(boundBy: 0)
+            guard isOnScreen(el) else { continue }
+
+            let f = el.frame
+            let aspect = f.width / max(f.height, 1)
+            XCTAssertGreaterThan(
+                aspect, 1.2,
+                "「\(label)」的宽高比 \(String(format: "%.2f", aspect)) 过小 —— "
+                + "它被压成了竖排（frame = \(f)）"
+            )
+            checked += 1
+        }
+        XCTAssertGreaterThan(
+            checked, 0,
+            "一个可见的距离感标签都没核验到 —— 这条几何断言等于没跑"
+        )
+
+        // 数值不许断行：`100%` 必须是一个整体。
+        // 断行后 XCUITest 拿到的 label 会含换行符或变成两段，
+        // 所以直接查是否存在完整的「100%」。
+        XCTAssertTrue(hasText("100%"), "「100%」被断行了 —— 履约率读起来会像两个不同的量")
+
+        capture("22-xxxl-profiles")
+    }
+
+    func test_profiles_dark() throws {
+        launch(screen: "profiles", appearance: "dark")
+        assertColorScheme("dark", context: "深色关系档案")
+        assertRendered("深色关系档案", expecting: "关系管理")
+        capture("23-dark-profiles")
     }
 
     // MARK: - 数据删除（隐私承诺的端到端验证）

@@ -140,12 +140,27 @@ struct RelationshipStatsCard: View {
     let activeCaseCount: Int
     let fulfillment: Double?
 
+    /// 网格最小列宽。随笔号缩放，理由见 `body` 里的注释。
+    ///
+    /// 数值经过实测校准，不是随手取的：
+    ///  · 常规字号下三列要能并排（屏幕宽 402 - 左右内边距 32 - 卡片内边距 48 ≈ 322，
+    ///    三列 + 两个间距 ≈ 单列 100pt），取 96 正好放下三列。
+    ///  · XXXL 下 `title2` 放大约 2.4 倍，96 同比到 230，
+    ///    322pt 只放得下一列 —— 这是**有意的**：宁可单列，
+    ///    也不能把「100%」拆成两行（截图实测过的那种残片）。
+    @ScaledMetric(relativeTo: .title2) private var minColumnWidth: CGFloat = 96
+
     var body: some View {
         // 三列固定横排在大字号下会被截断（界面审查实测：accessibility-XXXL 时
         // 变成 `2/0/1…` 这类不可读残片，因为 StatItem 用了 minimumScaleFactor）。
         // 改用自适应网格：放不下就自动降为两列 / 单列。
+        //
+        // 最小列宽必须**随笔号放大**：写死 96pt 时，XXXL 下字的实际宽度已经
+        // 超过 96pt，但网格仍按 96pt 算"放得下三列"，于是挤成
+        // 「100」+「%」两行（截图实测）。改成 @ScaledMetric 后，
+        // 大字号下每列最小宽度同比变大，网格会自动降到两列或单列。
         LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 96), spacing: ThemeManager.Spacing.md)],
+            columns: [GridItem(.adaptive(minimum: minColumnWidth), spacing: ThemeManager.Spacing.md)],
             spacing: ThemeManager.Spacing.md
         ) {
             StatItem(
@@ -178,27 +193,70 @@ struct StatItem: View {
     let label: String
     let tint: Color
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
-        VStack(spacing: ThemeManager.Spacing.xs) {
-            Image(systemName: icon)
-                .font(.title3)
-                .foregroundStyle(tint)
-            // 不用 minimumScaleFactor：它把「放不下」伪装成字重问题，
-            // 结果是字号越大、内容越看不见。允许折行，让容器去适应内容。
-            Text(value)
-                .font(ThemeManager.Typography.title2)
-                .foregroundStyle(ThemeManager.Colors.textPrimary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(label)
-                .font(ThemeManager.Typography.caption)
-                .foregroundStyle(ThemeManager.Colors.textSecondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+        // 大字号下改为**横排**：图标 | 数值 + 标签。
+        //
+        // ## 为什么必须换方向
+        //
+        // 竖排（图标在上、数值在中、标签在下）三行叠起来，在 XXXL 下
+        // 单张卡片就占满整屏 —— 截图实测：统计卡片把两条人物档案全部挤出屏幕，
+        // 用户打开关系管理**看不到任何人**。
+        // 单测和"渲染出来了"类断言全都通过，因为每段文字确实都在。
+        //
+        // 横排后高度降到原来的约 1/3，三条统计能完整留在首屏上半部分。
+        if dynamicTypeSize.isAccessibilitySize {
+            HStack(spacing: ThemeManager.Spacing.sm) {
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundStyle(tint)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 0) {
+                    valueText
+                    labelText
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(label) \(value)")
+        } else {
+            VStack(spacing: ThemeManager.Spacing.xs) {
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundStyle(tint)
+                valueText
+                labelText
+            }
+            .frame(maxWidth: .infinity)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(label) \(value)")
         }
-        .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(label) \(value)")
+    }
+
+    /// `value` 是「2」「—」「100%」这类**短符号串**，数字和 % 是一个整体。
+    ///
+    /// 允许它折行的后果已在 XXXL 截图里实测到：「100%」被断成「100」+「%」，
+    /// 读起来像两个不同的量。所以必须禁止换行 —— 与 label 相反：
+    /// label 是中文短语，大字号下折行仍读得通，而数值符号串折行就是错误。
+    ///
+    /// 仍不用 minimumScaleFactor：靠在父层自适应列数 / 横排布局给它让出宽度。
+    private var valueText: some View {
+        Text(value)
+            .font(ThemeManager.Typography.title2)
+            .foregroundStyle(ThemeManager.Colors.textPrimary)
+            .multilineTextAlignment(.center)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var labelText: some View {
+        Text(label)
+            .font(ThemeManager.Typography.caption)
+            .foregroundStyle(ThemeManager.Colors.textSecondary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -207,54 +265,84 @@ struct StatItem: View {
 struct ProfileCard: View {
     let profile: Profile
 
-    /// 确定性头像色：基于 UUID 而非 `hashValue`。
-    /// `String.hashValue` 每个进程种子不同，会导致头像颜色每次启动都变。
-    private var avatarColor: Color {
-        let palette: [Color] = [
-            ThemeManager.Colors.primary,
-            ThemeManager.Colors.accent1,
-            ThemeManager.Colors.accent2,
-            ThemeManager.Colors.accent3,
-            ThemeManager.Colors.accent4
-        ]
-        var hash: UInt64 = 1469598103934665603   // FNV-1a 偏移
-        for byte in profile.id.uuidString.utf8 {
-            hash = (hash ^ UInt64(byte)) &* 1099511628211
-        }
-        return palette[Int(hash % UInt64(palette.count))]
-    }
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    private var initials: String {
-        String(profile.name.prefix(1))
-    }
-
-    /// 头像直径随笔号语义缩放，与内部的 `.title3` 同源。
+    /// 头像直径随笔号语义缩放。
     ///
     /// 原先硬编码 52pt、字号却是会放大的 `.title3`：
     /// XXXL 下一个汉字就宽过圆，首字被圆裁掉两侧。
     /// 这和 `TestimonyEditor` 的题号徽章是同一类缺陷——**框是常量、字是变量**。
+    /// 现在交给 `AvatarCircle` 按直径比例算字号，圆和字是同一比例。
     @ScaledMetric(relativeTo: .title3) private var avatarDiameter: CGFloat = 52
+
+    /// 辅助功能字号下改为上下排布。
+    ///
+    /// ## 为什么必须换布局，而不是"让它挤一挤"
+    ///
+    /// 原布局是固定 HStack：头像 + 名字列 + Spacer + 距离胶囊 + 箭头。
+    /// XXXL 下每个元素的**字号**都放大了，但间距和头像的**横向占比**没变，
+    /// 于是名字列被压到只剩一个字宽 —— 截图实测的后果是：
+    ///   · 「妈妈」竖排成「妈」/「妈」两行
+    ///   · 「有距离」竖排成「有」/「距」/「离」一列
+    /// 单测和 UI 断言**全部通过**，因为这确实是"渲染出来了"，
+    /// 只是渲染成了一列竖字。只有看图才能发现。
+    ///
+    /// 换布局的判断依据用 `dynamicTypeSize.isAccessibilitySize`，
+    /// 而不是去量宽度：宽度判断依赖具体机型，而这个缺陷的本质是字号档位。
+    private var isAccessibilitySize: Bool {
+        dynamicTypeSize.isAccessibilitySize
+    }
+
+    private var intimacyBadge: some View {
+        // 原为一串两位数健康分。现在换成用户自己标注的距离感标签 ——
+        // 没有数字，也就没有"看起来像测量值"的暗示。
+        Text(profile.intimacyLabel)
+            .font(ThemeManager.Typography.caption)
+            .foregroundStyle(ThemeManager.Colors.textSecondary)
+            // 三个字的标签不许被压成一列竖字。
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(ThemeManager.Colors.surfaceElevated)
+            .clipShape(Capsule())
+    }
 
     var body: some View {
         HStack(spacing: ThemeManager.Spacing.md) {
-            ZStack {
-                Circle()
-                    .fill(avatarColor.opacity(0.15))
-                    .frame(width: avatarDiameter, height: avatarDiameter)
-                Text(initials)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(avatarColor)
-                    .lineLimit(1)
-            }
+            // 颜色/照片的唯一真相来源。
+            //
+            // 原来这里是自己用 UUID 哈希算颜色，**完全不读 `profile.avatar`** ——
+            // 用户在添加页选的色保存后从来没生效过。现在统一走 `AvatarCircle`，
+            // 它内部解析 `avatar`，解析不出来才回退到 UUID 派生色。
+            AvatarCircle(
+                name: profile.name,
+                raw: profile.avatar,
+                fallbackID: profile.id,
+                diameter: avatarDiameter
+            )
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(profile.name)
                     .font(ThemeManager.Typography.headline)
                     .foregroundStyle(ThemeManager.Colors.textPrimary)
+                    // 名字是短词，永远不该折行。折了就把「妈妈」显示成两行。
+                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                Text(profile.relationship.displayName)
+                // 用 `relationshipLabel` 而不是 `relationship.displayName`：
+                // 后者永远显示枚举的「其他」，把用户填的自定义名称吞掉了。
+                Text(profile.relationshipLabel)
                     .font(ThemeManager.Typography.caption)
                     .foregroundStyle(ThemeManager.Colors.textSecondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if isAccessibilitySize {
+                    // 大字号：胶囊挪到名字下面，横向空间全留给文字。
+                    intimacyBadge
+                        .padding(.top, 2)
+                }
 
                 if let last = profile.lastInteractionAt {
                     Text("最近记录 \(AppFormatters.relativeText(for: last))")
@@ -262,18 +350,14 @@ struct ProfileCard: View {
                         .foregroundStyle(ThemeManager.Colors.textSecondary)
                 }
             }
+            // 让名字列在还有余量时优先占据空间，而不是被右侧挤掉。
+            .layoutPriority(1)
 
-            Spacer()
+            Spacer(minLength: 0)
 
-            // 原为一串两位数健康分。现在换成用户自己标注的距离感标签 ——
-            // 没有数字，也就没有"看起来像测量值"的暗示。
-            Text(profile.intimacyLabel)
-                .font(ThemeManager.Typography.caption)
-                .foregroundStyle(ThemeManager.Colors.textSecondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(ThemeManager.Colors.surfaceElevated)
-                .clipShape(Capsule())
+            if !isAccessibilitySize {
+                intimacyBadge
+            }
 
             Image(systemName: "chevron.right")
                 .font(.caption2)
@@ -282,8 +366,13 @@ struct ProfileCard: View {
         .padding(ThemeManager.Spacing.md)
         .surfaceCard(cornerRadius: ThemeManager.Radius.md)
         .accessibilityElement(children: .combine)
+        // 必须用 `relationshipLabel`，与上面可见文本保持一致。
+        // 这里原先写的是 `relationship.displayName`：`.accessibilityElement(children: .combine)`
+        // 会**丢弃**内部 Text 的可访问性文本、只保留这一条 label，
+        // 于是肉眼看到「母女」、VoiceOver 读出的却是「其他」——
+        // 用户自填的关系名对读屏用户等于不存在。
         .accessibilityLabel(
-            "\(profile.name)，\(profile.relationship.displayName)，距离\(profile.intimacyLabel)"
+            "\(profile.name)，\(profile.relationshipLabel)，距离\(profile.intimacyLabel)"
         )
     }
 }

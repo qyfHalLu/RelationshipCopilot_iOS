@@ -78,14 +78,14 @@ struct GuidedRepairView: View {
         case "losses-empty":
             return (draft, .losses)
         case "losses-abstract":
-            draft.setLoss("她很不开心，饭也没吃完就回房了", for: .dignity)
+            draft.setLoss("TA 很不开心，饭也没吃完就回房了", for: .dignity)
             return (draft, .losses)
         case "losses-filled":
-            draft.setLoss("她妈在客厅，她被我那句话堵得没再说下去", for: .dignity)
+            draft.setLoss("TA 妈妈在客厅，TA 被我那句话堵得没再说下去", for: .dignity)
             return (draft, .losses)
         case "skeleton":
             draft.skeleton = [
-                "答应了六点去接她，结果跟同事去喝酒了",
+                "答应了六点去接 TA，结果跟同事去喝酒了",
                 "白等了三个多小时",
                 "我把它排在了后面",
                 "这周三把饭补上"
@@ -280,7 +280,7 @@ struct GuidedRepairView: View {
             EmptyView()
 
         case .action:
-            editor($draft.action, placeholder: "六点我去接她，结果……")
+            editor($draft.action, placeholder: "六点我去接 TA，结果……")
             issueList(RepairLinter.lintAction(draft.action))
 
         case .explanation:
@@ -292,7 +292,7 @@ struct GuidedRepairView: View {
             lossesStep
 
         case .perspective:
-            Text("我猜他当时最在意的是")
+            Text("我猜 TA 当时最在意的是")
                 .font(ThemeManager.Typography.subheadline)
                 .foregroundStyle(ThemeManager.Colors.textSecondary)
             editor($draft.guess, placeholder: "我猜……", minHeight: 80)

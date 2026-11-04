@@ -59,7 +59,7 @@ struct PromisesView: View {
                             icon: "checklist",
                             title: promises.isEmpty ? "还没有承诺" : "这里还没有内容",
                             message: promises.isEmpty
-                                ? "写下一个具体、可验证的承诺，比如「这周陪她散步两次」。"
+                                ? "写下一个具体、可验证的承诺，比如「这周陪 TA 散步两次」。"
                                 : "换个筛选条件看看。",
                             actionTitle: promises.isEmpty ? "添加承诺" : nil,
                             action: promises.isEmpty ? { showAddPromise = true } : nil
@@ -244,13 +244,13 @@ struct AddPromiseView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("比如：这周陪她散步两次", text: $content, axis: .vertical)
+                    TextField("比如：这周陪 TA 散步两次", text: $content, axis: .vertical)
                         .lineLimit(2...5)
                         .focused($contentFocused)
                         .accessibilityLabel("承诺内容")
                     // 承诺是「一个具体到能验证的动作」，往往要一两句话才说得清
                     // （哪天、做什么、做到什么程度）。打字容易越写越糊，
-                    // 最后变成「对她好一点」这种没法打卡的东西。
+                    // 最后变成「对 TA 好一点」这种没法打卡的东西。
                     VoiceInputButton(text: $content, subject: "承诺内容", compact: true)
                 } header: {
                     Text("承诺内容")

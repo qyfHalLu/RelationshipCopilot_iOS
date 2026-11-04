@@ -202,7 +202,7 @@ struct DisputeVerdict: Codable, Equatable, Sendable {
     ///
     /// ## 为什么只有 solvable 可以
     ///
-    /// 可解决型的第四段是一个**具体动作**（"这周找一次，她说完之后你先只说一句…"），
+    /// 可解决型的第四段是一个**具体动作**（"这周找一次，TA 说完之后你先只说一句…"），
     /// 它有明确的完成条件，能打卡、能算连续天数。
     ///
     /// 永久型（perpetual）的第四段是**共存说法**（"约定一句话：我现在只想被听"），
@@ -224,12 +224,16 @@ struct DisputeVerdict: Codable, Equatable, Sendable {
     // 若模型仍然写出「你错了 60%」这类表述，直接判定不可交付，走降级路径。
 
     /// 出现即判定不可交付的片段（责任分配 / 人格评价）。
+    ///
+    /// gender-neutral-scan:off —— 这是拦截模型输出的黑名单，
+    /// 必须穷举「他/她」的写法才能拦住。不是产品文案。
     static let forbiddenPhrases: [String] = [
         "%", "百分之", "责任比", "责任划分", "过错比例",
         "谁对谁错", "是对的", "是错的",
         "你错了", "TA 错了", "他错了", "她错了",
         "性格有问题", "人品", "该道歉的是"
     ]
+    // gender-neutral-scan:on
 
     /// 扫描整个结果里是否出现禁用措辞。返回命中的片段（空 = 通过）。
     var forbiddenHits: [String] {
@@ -238,5 +242,41 @@ struct DisputeVerdict: Codable, Equatable, Sendable {
         return Self.forbiddenPhrases.filter { haystack.contains($0) }
     }
 
-    var passesContentGuards: Bool { forbiddenHits.isEmpty }
+    // 输出侧兜底：模型不得假定当事人性别。
+    //
+    // 为什么不能塞进 `forbiddenPhrases`：那张表是「含即违规」的朴素匹配，
+    // 而单字「他」在「其他」「他人」「他日」里完全合法，直接拉黑会大面积误拦，
+    // 反而让降级路径天天被触发。所以这里要按词法判断。
+    //
+    // 判定规则：
+    //   · 「她」—— 现代汉语里只有一个含义，出现即违规，无需上下文。
+    //   · 「他」—— 只要不落在「其他 / 他人 / 他日 / 他乡 / 他处 / 他方 / 他年」里，
+    //     就是第三人称代词，违规。
+    //   · 「他们 / 她们」—— 已经带了性别或复数歧义，一并拦下，改写成「你们 / 双方」。
+    // gender-neutral-scan:off —— 下面是拦截用的词表，必须写出这些字才能拦。
+    static let genderAmbiguousFragments: [String] = ["她", "他们", "她们"]
+    // gender-neutral-scan:on
+
+    /// 「他」的合法非代词用法（连这个词一起出现时放过）。
+    private static let taAsOtherWord = ["其他", "他人", "他日", "他乡", "他处", "他方", "他年"]
+
+    /// 返回命中的性别化指代（空 = 通过）。
+    var genderedHits: [String] {
+        let haystack = [reframe, needA, needB, stuckPoint, action ?? "", coexistence ?? ""]
+            .joined(separator: "\n")
+
+        var hits: [String] = Self.genderAmbiguousFragments.filter { haystack.contains($0) }
+
+        // 逐个检查「他」：先把它从合法词里剔掉，再看还有没有剩余。
+        var residue = haystack
+        for word in Self.taAsOtherWord {
+            residue = residue.replacingOccurrences(of: word, with: "")
+        }
+        if residue.contains("他") {
+            hits.append("他")
+        }
+        return hits
+    }
+
+    var passesContentGuards: Bool { forbiddenHits.isEmpty && genderedHits.isEmpty }
 }

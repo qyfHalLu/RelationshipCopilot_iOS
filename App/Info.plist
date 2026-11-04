@@ -31,6 +31,8 @@
 	<string>用于快速解锁你保存在本机的关系记录。</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>用于录制你们的对话，以便生成关系分析。录音只保存在本机，分析完成后会立即删除。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于从相册选择一张照片作为人物头像。照片只保存在本机，不会上传。</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>用于把录音转成文字以生成分析。优先使用设备端识别；若设备不支持，音频会交由系统语音识别服务处理。</string>
 	<key>RCAllowBetaSkipAuth</key>
