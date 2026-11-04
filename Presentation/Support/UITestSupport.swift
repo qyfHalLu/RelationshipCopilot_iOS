@@ -75,6 +75,27 @@ enum UITestSupport {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    /// 仅供 UI 测试的代理地址覆盖。
+    ///
+    /// ## 为什么需要它
+    ///
+    /// 远程交接屏要先有 `proxyBaseURL` 才能拼出邀请链接，而测试环境
+    /// 的 `Info.plist` 里 `RCProxyBaseURL` 是空的 —— 于是那一屏永远走
+    /// 「链接没生成成功」的兜底分支，**正常路径一次都截不到**。
+    ///
+    /// 更糟的是：断言会照样通过，因为两分支都有「等 TA 在自己手机上写完」这句标题。
+    /// 这就是本仓库反复遇到的「断言全绿但界面是错的」。
+    ///
+    /// ## 为什么用假域名而不是真地址
+    ///
+    /// 这一屏只负责**渲染**链接，不发请求（请求在 `InviteService`，
+    /// 由 `.task` 触发，失败也只是写一句提示）。用 `example.com`
+    /// 保证测试绝不真的打到线上 Worker —— 否则跑一次截图测试就会往
+    /// 生产 KV 里塞一个 caseId。
+    static var overriddenProxyBaseURL: String? {
+        argumentValue("--ui-test-proxy-base=")
+    }
+
     /// 解析 `--ui-test-clear-auth`：启动时清掉 Keychain 里的登录态。
     ///
     /// 为什么需要：iOS 的 Keychain **在卸载 App 后仍然保留**（这是系统行为，
@@ -183,7 +204,14 @@ enum UITestSupport {
         "perpetual":  UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
         "degraded":   UUID(uuidString: "66666666-6666-6666-6666-666666666666")!,
         "blocked":    UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
-        "solo":       UUID(uuidString: "88888888-8888-8888-8888-888888888888")!
+        "solo":       UUID(uuidString: "88888888-8888-8888-8888-888888888888")!,
+        // 远程模式两个状态：有链接 / 链接生成失败。
+        //
+        // 后者必须单独造一份：`missingLinkCard` 是这一屏唯一的"你还能怎么办"出口，
+        // 而它只在 `inviteLink` 为 nil 时出现 —— 正常路径永远看不到它。
+        // 如果不专门截图，那条兜底路径等于从未被验证过。
+        "remote":     UUID(uuidString: "99999999-9999-9999-9999-999999999991")!,
+        "remoteNoLink": UUID(uuidString: "99999999-9999-9999-9999-999999999992")!
     ]
 
     /// 注入样本数据。
@@ -290,7 +318,9 @@ enum UITestSupport {
 
         let newCase = DisputeCase(
             title: sampleTitle(for: key),
-            mode: key == "solo" ? .solo : .sameDevice,
+            // 远程样本必须真的用 `.remote` —— 否则测的是同机模式的"递手机"那一屏，
+            // 而且断言会通过（两屏都叫 waitingForB）。
+            mode: key == "solo" ? .solo : (key.hasPrefix("remote") ? .remote : .sameDevice),
             // 固定 id：这样 `--ui-test-case=closed` 可以反复截图同一件。
             id: targetID
         )
@@ -351,6 +381,23 @@ enum UITestSupport {
             newCase.state = .blocked
             newCase.safetyConcerns = [.violence]
 
+        case "remote":
+            newCase.sideA = sideA
+            newCase.state = .waitingForB
+            // 写死一套邀请材料，让链接卡片有内容可渲染。
+            //
+            // 这里**不能**调 `ensureInviteLink` —— 那会现场生成随机密钥，
+            // 每次截图的链接长度/内容都不同，没法判断"缩写是否正确"。
+            // 用固定值还有一个好处：截图里能直接看出 caseId 与 key 是否
+            // 分别落在路径与 fragment 上。
+            newCase.inviteCaseId = "uitestCaseId1234567890"
+            newCase.inviteKeyBase64URL = "uitestKeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+        case "remoteNoLink":
+            newCase.sideA = sideA
+            newCase.state = .waitingForB
+            // 刻意不写 inviteCaseId / inviteKeyBase64URL：走"链接没生成成功"的兜底分支。
+
         default:
             break
         }
@@ -360,6 +407,7 @@ enum UITestSupport {
         switch key {
         case "blocked":  return "昨天晚上那件事"
         case "solo":     return "我好像总是先解释"
+        case "remote", "remoteNoLink": return "异地这半年"
         default:         return "她说我总在解释，不在听"
         }
     }

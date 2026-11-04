@@ -50,20 +50,43 @@ final class DisputeFlowModel {
 
     private let service: DisputeEvaluating
 
+    /// 邀请服务。远程模式才用到；其他模式注入 nil 也没关系。
+    ///
+    /// `var` 而不是 `let`：地址在视图的 `.task` 里才解析出来（它要读 Info.plist
+    /// 与 Keychain），而模型在那之前已经构造好了。允许视图把解析结果回填进来，
+    /// 保证"拼链接用的地址"和"发请求用的地址"是同一个 ——
+    /// 这两者一旦分叉，界面上表现为链接正常显示但一点刷新就报配置错误。
+    var inviteService: InviteServicing
+
     // 注意：这里刻意**不**写 `service: DisputeEvaluating = AIService.shared`。
     // 默认参数表达式在调用方的非隔离上下文求值，而 `AIService` 是 @MainActor 的，
     // 会触发 "main actor-isolated static property 'shared' can not be referenced
     // from a nonisolated context"（Swift 6 下是错误）。改为在本类的 @MainActor
     // init 体内解析默认值。
-    init(mode: DisputeMode, state: DisputeCaseState, service: DisputeEvaluating? = nil) {
+    init(
+        mode: DisputeMode,
+        state: DisputeCaseState,
+        service: DisputeEvaluating? = nil,
+        inviteService: InviteServicing? = nil
+    ) {
         self.mode = mode
         self.state = state
         self.service = service ?? AIService.shared
+        self.inviteService = inviteService ?? InviteService()
     }
 
     /// 由已存在的案卷恢复。
-    convenience init(case disputeCase: DisputeCase, service: DisputeEvaluating? = nil) {
-        self.init(mode: disputeCase.mode, state: disputeCase.state, service: service)
+    convenience init(
+        case disputeCase: DisputeCase,
+        service: DisputeEvaluating? = nil,
+        inviteService: InviteServicing? = nil
+    ) {
+        self.init(
+            mode: disputeCase.mode,
+            state: disputeCase.state,
+            service: service,
+            inviteService: inviteService
+        )
         if disputeCase.isBlocked {
             self.outcome = .blocked(SafetyScreen.guidance(for: disputeCase.safetyConcerns))
         } else if let verdict = disputeCase.verdict {
@@ -168,6 +191,166 @@ final class DisputeFlowModel {
         draft = DisputeTestimony()
         save(context)
     }
+
+    // MARK: 远程邀请
+
+    /// 邀请的服务端状态。nil = 还没查过。
+    private(set) var inviteStatus: InviteStatus?
+
+    /// 正在查询对方进度。
+    private(set) var isRefreshingInvite = false
+
+    /// 邀请相关的错误（与 `error` 分开：这个只影响交接屏，不该弹成全局告警）。
+    private(set) var inviteErrorMessage: String?
+
+    /// 已经连续查了几次还是没看到对方那份。
+    ///
+    /// KV 是最终一致的，读写之间最长约 60 秒延迟。所以"查不到"绝不能直接
+    /// 判定"对方没写"—— 那会让用户以为对方放鸽子，而内容其实已经在服务器上了。
+    /// 这里记录次数，界面据此把文案从"还没写"软化成"刚提交的话可能要等一会儿"。
+    private(set) var invitePollCount = 0
+
+    /// 生成（或复用）邀请链接。
+    ///
+    /// 幂等：已有材料就直接返回，不换密钥 ——
+    /// 换一次密钥等于让对方手里那条链接作废，而用户完全可能只是切了个后台再回来。
+    func ensureInviteLink(for disputeCase: DisputeCase, context: ModelContext) -> InviteLink? {
+        if let existing = disputeCase.inviteLink { return existing }
+
+        let (secret, _) = InviteSecret.generate()
+        guard disputeCase.setInvite(secret) else { return disputeCase.inviteLink }
+        save(context)
+        Telemetry.shared.track(.disputeInviteCreated)
+        return disputeCase.inviteLink
+    }
+
+    /// 查询对方进度；若对方已写完，顺手解密并写入 B 侧。
+    ///
+    /// - Returns: 对方那份是否已经成功取回并写入。
+    @discardableResult
+    func refreshInvite(for disputeCase: DisputeCase, context: ModelContext) async -> Bool {
+        guard let link = disputeCase.inviteLink else {
+            inviteErrorMessage = "这个邀请没有生成成功。"
+            return false
+        }
+        guard !isRefreshingInvite else { return false }
+
+        isRefreshingInvite = true
+        inviteErrorMessage = nil
+        defer { isRefreshingInvite = false }
+
+        do {
+            let status = try await inviteService.fetchStatus(caseId: link.caseId)
+            inviteStatus = status
+            invitePollCount += 1
+
+            guard let ciphertext = status.testimonies["b"] else {
+                // 还没写。注意这**不代表**对方没写过 —— KV 可能还没同步到。
+                return false
+            }
+
+            // 已写过但密钥已被用掉（重复刷新）：认为已完成，不必再解一次。
+            guard let keyBase64 = disputeCase.inviteKeyBase64URL else {
+                return disputeCase.sideB != nil
+            }
+
+            let key = try InviteCrypto.key(fromBase64URL: keyBase64)
+            let payload = try InviteCrypto.openPayload(ciphertext, key: key)
+
+            guard let testimony = payload.toTestimony() else {
+                let missing = payload.missingQuestions()
+                inviteErrorMessage = missing.isEmpty
+                    ? "TA 那一份的内容读不出来。"
+                    : "TA 那一份还缺 \(missing.count) 题（\(missing.map(\.title).joined(separator: "、"))），请让 TA 重写一次。"
+                return false
+            }
+
+            // 走正式提交路径，而不是直接写 sideB ——
+            // 这样状态机、安全筛查、标题生成全部与同机模式共用一套逻辑。
+            // 远程模式此时必须是 `collectingB`：A 提交后停在 `waitingForB`，
+            // 而对方的证词到达就是"进入 B 已写"的触发点。
+            if disputeCase.state == .waitingForB {
+                _ = disputeCase.advance(to: .collectingB)
+                state = .collectingB
+            }
+
+            guard disputeCase.submit(testimony, by: .b) != nil else {
+                inviteErrorMessage = "TA 那一份没法写入这件案卷。"
+                return false
+            }
+            state = disputeCase.state
+            disputeCase.consumeInviteKey()
+            save(context)
+            Telemetry.shared.track(.disputeInviteReceived)
+            return true
+        } catch let appError as AppError {
+            inviteErrorMessage = appError.errorDescription
+            return false
+        } catch let serviceError as InviteServiceError {
+            inviteErrorMessage = serviceError.errorDescription
+            return false
+        } catch let payloadError as InvitePayloadError {
+            inviteErrorMessage = payloadError.errorDescription
+            return false
+        } catch let urlError as URLError {
+            // 不能把 `error.localizedDescription` 直接给用户看。
+            //
+            // 截图里实测过：网络不通时这一句是英文的
+            // 「A server with the specified hostname could not be found.」
+            // —— 在一个全中文、且此刻用户正在焦虑"对方能不能收到"的界面上，
+            // 突然弹出系统英文报错，既看不懂也不知道该怎么办。
+            inviteErrorMessage = Self.message(for: urlError)
+            return false
+        } catch {
+            inviteErrorMessage = "暂时连不上，请检查网络后再试一次。"
+            return false
+        }
+    }
+
+    /// 把 `URLError` 翻成一句能指导动作的中文。
+    ///
+    /// 只区分"能自己解决"和"等一会儿再试"两类 —— 给用户诊断码没有意义，
+    /// 他需要知道的是现在就放弃还是重试。
+    private static func message(for error: URLError) -> String {
+        switch error.code {
+        case .notConnectedToInternet, .networkConnectionLost:
+            return "现在没有网络。连上之后再点「刷新看看」，TA 写的内容不会丢。"
+        case .timedOut:
+            return "这次请求超时了。过一会儿再点「刷新看看」。"
+        case .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
+            return "连不上服务端。可以先用「同一台手机」的方式继续。"
+        default:
+            return "暂时连不上，请稍后再试。也可以先用「同一台手机」的方式。"
+        }
+    }
+
+    /// 放弃远程模式，改用同一台手机继续。
+    ///
+    /// 这里**不重置 sideA** —— A 已经写过的那份是劳动成果，
+    /// 退回只是换一种收集方式，不是让他重写。
+    /// 状态回到 `collectingA`，并把已落盘的证词填回草稿，
+    /// 用户点一次"提交"就会重新走到 `waitingForB`，那时走同机模式的递手机界面。
+    func switchToSameDevice(_ disputeCase: DisputeCase, context: ModelContext) {
+        guard disputeCase.mode == .remote else { return }
+        disputeCase.abandonInvite()
+        Telemetry.shared.track(.disputeInviteAbandoned)
+
+        // 先把模式拨回去再迁移：`advance` 内部按 `mode` 判断合法性，
+        // 顺序反了会让 `.remote` 下的 `.collectingA` 目标被拒。
+        disputeCase.mode = .sameDevice
+        guard disputeCase.advance(to: .collectingA) else {
+            save(context)
+            return
+        }
+        state = .collectingA
+        draft = disputeCase.sideA ?? DisputeTestimony()
+        invocationRestoredDraft = disputeCase.sideA != nil
+        save(context)
+    }
+
+    /// 退回同机模式时，草稿是从已提交的 sideA 恢复的（不是用户重新打的字）。
+    /// 界面据此提示"你的那份还在，确认一下再交"。
+    private(set) var invocationRestoredDraft = false
 
     /// 生成第三方之见。
     func generate(for disputeCase: DisputeCase, context: ModelContext) async {

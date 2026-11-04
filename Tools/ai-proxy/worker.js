@@ -43,6 +43,10 @@
 const UPSTREAM = "https://www.sophnet.com/api/open-apis/v1/chat/completions";
 const MODEL = "DeepSeek-V4.1-Flash-1017";
 
+// 评理邀请（跨设备填写）。独立模块，理由见 `invite.js` 顶部注释 ——
+// 它有自己的鉴权规则（对方网页没有 App 令牌）和独立的存储（KV）。
+import { handleInvite } from "./invite.js";
+
 /**
  * 推理模型的 token 预算。
  *
@@ -421,6 +425,17 @@ export default {
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204 });
     }
+
+    // 评理邀请放在令牌校验**之前**。
+    //
+    // 关键原因：对方是在自己手机浏览器里打开链接的普通人，手里没有、
+    // 也不该有 App 的内测令牌。如果这段放在令牌后面，等于这个功能
+    // 只对"已经装了 App 并配好令牌的人"可用 —— 那它就没有存在意义了。
+    //
+    // 这一路的防滥用靠 IP 配额 + caseId 位次上限 + 7 天 TTL，
+    // 不靠令牌。细节见 `invite.js`。
+    const inviteResponse = await handleInvite(request, url, env, checkQuota);
+    if (inviteResponse) return inviteResponse;
 
     if (request.method !== "POST") {
       return fail("只接受 POST", 405);

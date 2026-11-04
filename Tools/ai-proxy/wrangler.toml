@@ -4,10 +4,12 @@
 #   cd Tools/ai-proxy
 #   npx wrangler secret put SOPHNET_API_KEY
 #   npx wrangler secret put APP_TOKEN
+#   npx wrangler kv namespace create INVITE_KV   # 把输出的 id 填到下面
 #   npx wrangler deploy
 #
 # 本地跑测试（不需要 wrangler，也不需要网络）：
 #   node worker.test.mjs
+#   node invite.test.mjs
 
 name = "relcopilot-proxy"
 main = "worker.js"
@@ -22,6 +24,24 @@ compatibility_date = "2026-01-01"
 # 普通变量放这里。
 [vars]
 MODEL = "DeepSeek-V4.1-Flash-1017"
+
+# ---------------------------------------------------------------------------
+# 评理邀请的暂存（跨设备填写）
+# ---------------------------------------------------------------------------
+#
+# 存的是**客户端加密后的密文**，Worker 没有、也不需要解密密钥。
+# 所以这里不放任何 secret —— 这块存储对服务端是不可读的。
+#
+# 创建（只需一次）：
+#   npx wrangler kv namespace create INVITE_KV
+# 把命令输出的 id / preview_id 填进下面的占位。
+#
+# 注意：KV 不是强一致存储，读写之间最长约 60 秒延迟。
+# 客户端取不到内容时要能重试，而不是判定"对方没写"。
+[[kv_namespaces]]
+binding = "INVITE_KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_KV_PREVIEW_ID"
 
 # 可选：给 Worker 自己加个访问频率上限，挡住明显的刷量。
 # 代码里的按 IP 配额是应用层的软限制，这里是边缘层的硬限制。

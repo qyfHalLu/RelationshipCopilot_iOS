@@ -105,11 +105,24 @@ extension DisputeCaseState {
     /// 否则「不小心漏了一个状态」就会变成「悄悄允许了一条不该存在的路径」。
     func canTransition(to next: DisputeCaseState, mode: DisputeMode) -> Bool {
         guard next != self else { return true }
+
+        // 双人语义的转移规则对 `sameDevice` 与 `remote` 完全相同：
+        // 都是"A 写完 → 停一下 → B 写 → 出结果"。
+        //
+        // 差别只在"停一下"那一步做什么 —— 同机是把手机递过去，
+        // 远程是等对方在自己设备上写完。**状态机不需要知道这个区别**，
+        // 否则每加一种收集方式就要改一遍状态表。
+        //
+        // 早先这里写的是 `mode == .sameDevice`，加 remote 后
+        // 远程模式提交会卡在 `collectingA` 出不去 —— 而编译器不会报错，
+        // 因为 `.solo` 那条分支还兜着，看起来"合法"。
+        let isTwoParty = mode.isTwoParty
+
         switch (self, next) {
 
         // 起点
         case (.collectingA, .waitingForB):
-            return mode == .sameDevice
+            return isTwoParty
         case (.collectingA, .ready):
             return mode == .solo
         case (.collectingA, .blocked):
@@ -117,19 +130,21 @@ extension DisputeCaseState {
 
         // 递交
         case (.waitingForB, .collectingB):
-            return mode == .sameDevice
+            return isTwoParty
         // 递错设备想退回去重写
         case (.waitingForB, .collectingA):
-            return mode == .sameDevice
+            return isTwoParty
 
         // B 写完
         case (.collectingB, .ready):
-            return mode == .sameDevice
+            return isTwoParty
         // B 想重写
         case (.collectingB, .collectingB):
             return true
         case (.collectingB, .collectingA):
-            return mode == .sameDevice
+            // 只有同机能退回上一位重写 —— 远程模式下 A 的设备上根本没有
+            // "正在写的 B"，退回 A 重新写会把已经传回来的那份证词丢掉。
+            return mode.isHandoverByDevice
         case (.collectingB, .blocked):
             return true
 
@@ -208,7 +223,14 @@ enum DisputeCaseGate {
             return sideA == nil ? .missingTestimony(.a) : .incompleteTestimony(.a)
         }
 
-        if mode == .sameDevice {
+        // 双人语义（同机 + 远程）都必须有完整的 B。
+        //
+        // 早先这里写的是 `mode == .sameDevice`，加 remote 之后
+        // 远程模式会**跳过 B 的全部检查**：B 没写也能生成、B 只写两题也能生成。
+        // 而 `DisputeCaseState.ready` 在那里是可到达的（状态机本身没错），
+        // 于是整条闸门形同不存在，且编译器不会提示 ——
+        // 因为 `.solo` 的语义里 B 本来就该是 nil，两个分支看起来都"合理"。
+        if mode.isTwoParty {
             guard let sideB, sideB.isComplete else {
                 return sideB == nil ? .missingTestimony(.b) : .incompleteTestimony(.b)
             }
@@ -219,7 +241,7 @@ enum DisputeCaseGate {
         if screeningA.isBlocking {
             return .safetyBlocked(screeningA.concerns)
         }
-        if mode == .sameDevice, let sideB {
+        if mode.isTwoParty, let sideB {
             let screeningB = SafetyScreen.screen(sideB)
             if screeningB.isBlocking {
                 return .safetyBlocked(screeningB.concerns)

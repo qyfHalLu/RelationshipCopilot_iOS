@@ -30,6 +30,40 @@ enum DisputeMode: String, Sendable, Codable {
     /// 这种模式下**绝对不能假装中立**。单方陈述下让 AI 说"你们各有一半责任"
     /// 是编造中立，比硬编码 65 分更糟 —— 因为它是动态生成的，看起来更可信。
     case solo
+
+    /// 远程模式：对方在自己的设备上通过邀请链接填写。
+    ///
+    /// ## 与 `sameDevice` 的本质区别，不是"用了网络"
+    ///
+    /// `sameDevice` 的密封是**界面级**的：两份证词都在同一个 SQLite 文件里，
+    /// 只是在界面上轮流隐藏。任何人拿到那台手机（或者它的备份），两份都能看到。
+    ///
+    /// `remote` 的密封是**密码学级**的：对方的证词用一次性密钥加密后
+    /// 才离开他的设备，密钥只存在于链接的 `#` 之后 ——
+    /// 服务端存的是一坨它解不开的密文，A 端也是拿到密文后才在本机解密。
+    ///
+    /// 所以这个模式在文案上可以比 `sameDevice` 说得多一点，
+    /// 但仍不能承诺"绝对安全"：明文最终会落到 A 的手机上，
+    /// 而那台手机的安全性是另一回事。
+    case remote
+
+    /// 是否需要对方在**另一台设备**上参与。
+    var requiresCounterpartDevice: Bool { self == .remote }
+
+    /// 是不是"两个人各自独立写一份"的语义。
+    ///
+    /// `sameDevice` 与 `remote` 在这一层完全一样：两份独立证词、互相不可读、
+    /// 都写完后才出结果。区别只在证词怎么汇聚到一台设备上。
+    ///
+    /// 状态机的转移规则、判词提示词、可交付性校验都该按这个属性判断，
+    /// 而不是各自写 `mode == .sameDevice` —— 那样每加一种收集方式
+    /// 都要全仓搜一遍，而且漏掉的地方编译器不会报错（`.solo` 分支会兜住）。
+    var isTwoParty: Bool { self == .sameDevice || self == .remote }
+
+    /// 界面文案里该不该出现"递手机"这类动作。
+    ///
+    /// 远程模式下说"把手机交给 TA"是错的 —— 对方根本不在旁边。
+    var isHandoverByDevice: Bool { self == .sameDevice }
 }
 
 enum DisputePrompt {
@@ -73,10 +107,18 @@ enum DisputePrompt {
     private static let bannedPlural = "「他们」"
     // gender-neutral-scan:on
 
-    /// 同机模式：读两份证词，给「第三方之见」。
+    /// 双人模式的提示词：读两份证词，给「第三方之见」。
+    ///
+    /// `.remote` 与 `.sameDevice` 复用同一份 —— 不是偷懒，是因为
+    /// **模型看到的输入完全相同**：两份独立写下的同一组回答，互相没看过。
+    /// 唯一区别在证词怎么收集到一台设备上（同一块屏幕轮流 vs 加密链接），
+    /// 那件事模型既看不到、也不该影响它的判断。
+    ///
+    /// 如果为远程模式单独写一份，两份提示词会立刻开始漂移 ——
+    /// 而这个仓库已经因为"同一个语义两处实现"栽过（见 README 的修复报告清单）。
     static func systemPrompt(mode: DisputeMode, relationshipLabel: String) -> String {
         switch mode {
-        case .sameDevice:
+        case .sameDevice, .remote:
             return sameDeviceSystemPrompt(relationshipLabel: relationshipLabel)
         case .solo:
             return soloSystemPrompt(relationshipLabel: relationshipLabel)

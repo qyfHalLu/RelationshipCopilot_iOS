@@ -63,8 +63,14 @@ struct DisputeRequest: Equatable, Sendable {
         self.mode = mode
         self.relationshipLabel = relationshipLabel
         self.sideA = sideA
-        // 单机模式强制抹掉 B，从类型层面杜绝"单方数据走进双人提示词"
-        self.sideB = (mode == .sameDevice) ? sideB : nil
+        // 单机模式强制抹掉 B，从类型层面杜绝"单方数据走进双人提示词"。
+        //
+        // 判断必须用 `isTwoParty` 而不是 `mode == .sameDevice` ——
+        // 后者在远程模式下会把对方辛苦写完、加密传回来的那一份**静默丢掉**，
+        // 然后模型拿着半份证词去"评理"。这条错误特别隐蔽：
+        // 请求照样成功、JSON 照样解析、界面照样出结果，
+        // 只是那个结果从头到尾只读过一个人的话。
+        self.sideB = mode.isTwoParty ? sideB : nil
     }
 
     /// 本地估算的 token 消耗（用于 TPM 预检）。

@@ -41,6 +41,7 @@ final class ScreenshotTests: XCTestCase {
         seed: Bool = true,
         aiKey: String? = nil,
         repairPrefill: String? = nil,
+        proxyBase: String? = nil,
         skipAutoLogin: Bool = false
     ) {
         app = XCUIApplication()
@@ -74,6 +75,13 @@ final class ScreenshotTests: XCTestCase {
             // 把引导流程直接推进到某个状态。中文输入经 typeText 不可靠，
             // 打不进去会让测试失败在"字没敲上"而不是"闸门没拦住"。
             arguments.append("--ui-test-repair-prefill=\(repairPrefill)")
+        }
+        if let proxyBase {
+            // 远程交接屏要先有代理地址才能拼出邀请链接。
+            // 测试环境的 Info.plist 里这一项是空的 —— 不注入的话那一屏
+            // 永远走"链接没生成成功"的兜底分支，正常路径一次都截不到，
+            // 而断言照样会过（两分支共用同一句标题）。这就是假绿。
+            arguments.append("--ui-test-proxy-base=\(proxyBase)")
         }
         // 每条用例都从空库开始。
         //
@@ -124,6 +132,33 @@ final class ScreenshotTests: XCTestCase {
             probe.label.contains("fontprobe:\(expected)"),
             "\(context)：实际字号档位是「\(probe.label)」，期望「\(expected)」——"
             + "这一屏截出来的不是你以为的那个字号"
+        )
+    }
+
+    /// 断言 App **实际生效**的深浅色，而不是"我记得我传了 `-appearanceMode`"。
+    ///
+    /// ## 为什么必须有这一条
+    ///
+    /// App 的默认主题本来就是暗色（`ash`）。所以"深色用例"即使
+    /// `-appearanceMode dark` 完全没生效，截出来的**仍然是一张暗色图**，
+    /// 断言也照样全绿 —— 用例名字叫 dark，实际什么都没验证。
+    ///
+    /// 实测过：远程交接屏的深色截图与默认截图逐像素一致，
+    /// 而两条用例都是绿的。这属于本项目反复出现的那类错误：
+    /// 断言度量的不是它声称要度量的维度。
+    ///
+    /// 现在读 `schemeprobe`（`@Environment(\.colorScheme)`，即渲染时真正生效的值），
+    /// 只有它证明自己是 dark，这条用例才算测到了"深色"。
+    private func assertScheme(_ expected: String, context: String) {
+        let probe = app.staticTexts["uitest.scheme.probe"]
+        XCTAssertTrue(
+            probe.waitForExistence(timeout: 10),
+            "\(context)：没有找到深浅色探针，无法证明本次跑在哪个主题下"
+        )
+        XCTAssertTrue(
+            probe.label.contains("schemeprobe:\(expected)"),
+            "\(context)：实际主题是「\(probe.label)」，期望「\(expected)」——"
+            + "这一屏截出来的不是你以为的那个主题"
         )
     }
 
@@ -436,6 +471,308 @@ final class ScreenshotTests: XCTestCase {
             "交接页泄露了上一方的证词内容，整套'各写各的'就废了"
         )
         capture("04-case-handover")
+    }
+
+    // MARK: - 远程交接（对方在自己手机上写）
+
+    //
+    // 这一屏与同机交接屏最大的区别是**它可能要停留几天**。
+    // 因此它必须承载状态（链接 / 进度 / 退路），而不只是"把手机递过去"。
+    //
+    // 断言只钉三件能机器判定的事：
+    //   ① 走的是远程那一屏，而不是同机那一屏（两屏共用 `waitingForB` 状态，
+    //      搞错时断言很容易照样通过）；
+    //   ② 链接里密钥不在 query（这是整套加密方案的地基）；
+    //   ③ 上一方的证词绝不外泄（与同机模式同一条铁律）。
+
+    func test_case_remoteHandover() throws {
+        launch(
+            screen: "disputes",
+            caseName: "remote",
+            // 测试环境没有真代理，必须注入一个假地址才能渲染出链接。
+            // 用 example.com 保证不会真的打到线上 Worker。
+            proxyBase: "https://invite.example.com"
+        )
+
+        assertRendered("远程交接页", expecting: "等 TA 在自己手机上写完")
+
+        // ① 确认走的是远程那一屏。
+        // 同机那屏的动作是「TA 已经拿到了」，远程这屏是「发给 TA」——
+        // 用这两个词区分，而不是靠状态名（状态名两屏完全一样）。
+        XCTAssertTrue(hasText("发给 TA"), "没有「发给 TA」按钮 —— 渲染成了同机交接屏")
+        XCTAssertFalse(hasText("TA 已经拿到了"), "出现了同机交接的动作，模式分流错了")
+
+        // ② 链接卡片存在，且进度两步都在。
+        XCTAssertTrue(hasText("邀请链接"), "远程交接页缺少链接卡片")
+        XCTAssertTrue(hasText("TA 打开了链接"), "缺少第一步进度")
+        XCTAssertTrue(hasText("TA 写完了"), "缺少第二步进度")
+
+        // ②b 缩写必须能区分是哪一次邀请。
+        //
+        // 早先这里用 `url.lastPathComponent` 做摘要，而这条链接的
+        // lastPathComponent **永远是 "page"** —— 截图里渲染成
+        // `invite.example.com/…/page…`，用户拿它核对"发给谁的那条"毫无用处。
+        // 现在取 caseId 前缀，所以断言点就是种子里的 caseId 开头。
+        XCTAssertTrue(
+            hasText("uitestCa"),
+            "链接缩写没有显示 caseId 前缀 —— 用户无法区分是哪一次邀请"
+        )
+        XCTAssertFalse(
+            hasText("/page…"),
+            "链接缩写仍显示成 page…，等于没有信息"
+        )
+
+        // ②c 缩写状态下密钥绝不能出现在屏幕上。
+        XCTAssertFalse(
+            hasText("uitestKeyAAAA"),
+            "缩写状态就泄露了邀请密钥 —— 密钥只应出现在「完整显示」之后"
+        )
+
+        // ③ 退路必须在场。这一屏可能永远等不到对方，没有退路就等于死局。
+        XCTAssertTrue(hasText("改成同一台手机"), "缺少退回同机模式的出口")
+        XCTAssertTrue(hasText("先不评了"), "缺少退出出口")
+
+        // ④ 不泄露 A 的证词。
+        XCTAssertFalse(
+            hasText("领导当众批评"),
+            "远程交接页泄露了上一方的证词 —— 密封在界面上就已经失效"
+        )
+
+        capture("04b-case-remote-handover")
+
+        // 这一屏比同机那屏长得多（链接卡 + 进度卡 + 退路 + 声明），
+        // 首屏截不到底部。滚到底再截一张，专门看"出口"有没有被 tab bar 压住。
+        let (tabTop, contentBottom) = scrollToBottomAndMeasure("remote-handover")
+        XCTAssertGreaterThan(tabTop, 0, "取不到 tab bar 顶边，测量无效")
+        XCTAssertLessThanOrEqual(
+            contentBottom, tabTop,
+            "远程交接页滚到底后，最后一行内容（底边 \(contentBottom)）仍被 tab bar（顶边 \(tabTop)）遮住"
+        )
+        // 滚到底时必须能看到「先不评了」—— 这是这一屏唯一的"我现在不想继续了"出口。
+        XCTAssertTrue(
+            hasText("先不评了"),
+            "滚到底仍看不到「先不评了」—— 用户没有明确的退出路径"
+        )
+        // 有链接时页脚仍要说明有效期与"回来刷新"这件事。
+        // 反向的对照：缺链接那一屏必须**没有**这句（见 missingLink 用例）。
+        XCTAssertTrue(
+            hasText("链接 7 天后失效"),
+            "有链接时页脚没有说明有效期 —— 用户不知道这条链接什么时候会失效"
+        )
+        capture("04b2-case-remote-handover-bottom")
+    }
+
+    func test_case_remoteHandover_missingLink() throws {
+        // 链接没生成成功时的兜底分支。这条路径在正常流程里永远看不到，
+        // 而它恰恰是用户卡住时唯一的提示 —— 不专门截图就等于没验证过。
+        launch(screen: "disputes", caseName: "remoteNoLink")
+
+        assertRendered("远程交接页（缺链接）", expecting: "这个邀请没有生成成功")
+        XCTAssertTrue(
+            hasText("改成同一台手机"),
+            "缺链接时缺少退回同机模式的出口 —— 用户会彻底卡死"
+        )
+        // 不能出现链接卡片：没有链接却显示"复制/发给 TA"，点了什么也不会发生。
+        XCTAssertFalse(hasText("邀请链接"), "没有链接时不该显示链接卡片")
+
+        // 说明文字必须是"这次没能生成链接"这一支。
+        //
+        // 早先它无条件写「把下面的链接发给 TA」——而下面根本没有链接，
+        // 用户会先找链接、找不到、再怀疑自己漏点了什么。
+        XCTAssertTrue(
+            hasText("没能生成链接"),
+            "缺链接时说明文案没有随之切换 —— 仍在让用户去看一个不存在的链接"
+        )
+        XCTAssertFalse(
+            hasText("把下面的链接发给 TA"),
+            "缺链接时仍在说「把下面的链接发给 TA」，文案与实际状态矛盾"
+        )
+        // 底部那行小字也必须跟着切换。
+        //
+        // 这条是最后从截图上发现的：上面三段文案都改对了，唯独页脚
+        // 还留着「链接 7 天后失效。TA 写完后你可以在这里刷新看到。」——
+        // 而这一屏根本没有链接。它读起来像是界面把状态弄丢了，
+        // 用户会反复下拉、反复点刷新，找一个从没生成过的链接。
+        XCTAssertFalse(
+            hasText("链接 7 天后失效"),
+            "缺链接时页脚仍在说「链接 7 天后失效」—— 这一屏根本没有链接"
+        )
+        // 页脚整句都不该出现，而不是换一句同意思的话。
+        //
+        // 换句的代价在同一次截图里就露出来了：这一屏一共出现了三处
+        // "你那份已经存在"（说明文案、缺链接卡片、以及换掉的页脚），
+        // 读起来像界面在反复安抚用户，反而放大不确定感。
+        XCTAssertFalse(
+            hasText("随时可以回来继续"),
+            "缺链接时页脚换成了第三遍「内容已保存」—— 同一屏里这句话已经说过两遍"
+        )
+        // 说明文案与卡片不能各自把"已保存 + 改用同机"两件事都说全。
+        //
+        // 这是第二张截图暴露的：页脚删掉之后，"你的那一份已经存好了"
+        // 仍然在说明文案和卡片正文里各出现一次，两句话连读像同一段话重复。
+        // 现在分工是「说明说状态、卡片说出路」，所以卡片那句该是承接而不是复述。
+        XCTAssertFalse(
+            hasText("你的这一份已经保存好了"),
+            "缺链接卡片仍在复述「内容已保存」—— 说明文案已经说过了"
+        )
+
+        capture("04c-case-remote-handover-nolink")
+    }
+
+    func test_case_remoteHandover_dark() throws {
+        // 这条用例刻意跑**亮色**，尽管名字叫 dark。
+        //
+        // 理由：App 的默认主题本来就是暗色（`ash`）。此前这条用例传
+        // `-appearanceMode dark`，截出来与默认那张逐像素一致 ——
+        // 它测的是"默认主题"，不是"深色主题"，而两条用例都是绿的。
+        //
+        // 真正缺的覆盖是**另一套主题**（`page` 亮色），因为
+        // 只有它会走 `Colors.surfaceElevated` / `panel` 的另一套取值。
+        // 主题切换本身已经由 `assertScheme` 与既有用例覆盖，
+        // 这里要的是"换一套配色之后这一屏还对不对"。
+        launch(
+            screen: "disputes",
+            caseName: "remote",
+            appearance: "light",
+            proxyBase: "https://invite.example.com"
+        )
+        // 必须证明自己真的跑在亮色下 —— 否则截出来的仍是默认暗色图，
+        // 而"卡片背景与页面背景有区分度"这类人工判断会彻底失去意义。
+        assertScheme("light", context: "远程交接页（亮色）")
+        assertRendered("远程交接页（亮色）", expecting: "等 TA 在自己手机上写完")
+
+        // 亮色下最容易被忽略的是"卡片与背景分不开"：
+        // 暗色靠明度差分层，亮色如果 surface 与 background 太接近，
+        // 整屏会糊成一片，而所有文字断言都会通过。
+        // 这里无法直接读颜色，所以退一步：截图供人眼判断，
+        // 同时确认链接与按钮这些关键元素确实在同一屏里。
+        XCTAssertTrue(hasText("邀请链接"), "亮色下缺少链接卡片 —— 可能整体没渲染出来")
+        XCTAssertTrue(hasText("发给 TA"), "亮色下缺少分享按钮")
+
+        capture("04d-case-remote-handover-light")
+    }
+
+    func test_case_remoteHandover_xxxl() throws {
+        launch(
+            screen: "disputes",
+            caseName: "remote",
+            anchor: "remote-xxxl",
+            font: "xxxl",
+            proxyBase: "https://invite.example.com"
+        )
+        assertFont("xxxl", context: "远程交接页")
+        assertRendered("远程交接页（XXXL）", expecting: "等 TA 在自己手机上写完")
+
+        // 首屏先留一张。
+        //
+        // 这条用例原来最后只截一张，而那张是在滚到底之后拍的 ——
+        // 首屏长什么样从此没有留证。我就是拿着一张"滚动中途"的图
+        // 误判过一次：按钮看着被 tab bar 切了，其实只是没滚完。
+        // 判断"要不要修"之前先得有准确的首屏证据。
+        capture("04e-case-remote-handover-xxxl-top")
+
+        // 上一条断言只证明"标题在屏幕上"。XXXL 下整屏内容会被推到下面，
+        // 所以按钮必须**滚动之后**才检查 —— 早先那条直接查按钮的写法
+        // 会因为"按钮在首屏外"而失败，而那并不是缺陷。
+        //
+        // 真正要验的是：它们存不存在、能不能点、有没有被压成竖排。
+        let scroll = app.scrollViews.firstMatch
+        XCTAssertTrue(scroll.waitForExistence(timeout: 10), "XXXL 下没有找到 ScrollView")
+
+        for label in ["复制链接", "发给 TA"] {
+            let button = app.buttons.containing(
+                NSPredicate(format: "label CONTAINS %@", label)
+            ).allElementsBoundByIndex.first
+
+            guard let button else {
+                XCTFail("XXXL 下找不到「\(label)」按钮")
+                continue
+            }
+            XCTAssertTrue(button.exists, "XXXL 下「\(label)」不存在")
+
+            // 滚到它**完整**可见，而不是"中心点能点到"。
+            //
+            // ## 这个循环条件修过一次，原因值得记下来
+            //
+            // 早先写的是 `while !button.isHittable`。`isHittable` 只验中心点
+            // 命中：浮动 tab bar 压住按钮下半截时，中心点仍在标签栏上沿之上，
+            // 它立刻返回 true，循环一次都不滚，然后下面那条断言也过了。
+            // 结果就是 04e 那张截图 —— 按钮被切掉一截，而用例全绿。
+            //
+            // 现在把"完整可见"写成显式条件：底边不得越过标签栏顶边，
+            // 顶边不得跑出屏幕上沿。两者有一个不满足就继续滚。
+            var tries = 0
+            while tries < 8 {
+                let tabTop = app.tabBars.firstMatch.frame.minY
+                let f = button.frame
+                if f.height > 0, f.maxY <= tabTop, f.minY >= 0 { break }
+                scroll.swipeUp(velocity: .fast)
+                tries += 1
+            }
+
+            // 滚完之后再量一次，用它做真正的判定。
+            let tabTop = app.tabBars.firstMatch.frame.minY
+            XCTAssertGreaterThan(tabTop, 0, "取不到 tab bar 顶边，遮挡判定无效")
+            let frame = button.frame
+            XCTAssertLessThanOrEqual(
+                frame.maxY, tabTop,
+                "XXXL 下「\(label)」的底边（\(Int(frame.maxY))）越过了 tab bar 顶边（\(Int(tabTop))）—— 按钮被切掉一截，滚到底也点不全"
+            )
+            XCTAssertGreaterThanOrEqual(
+                frame.minY, 0,
+                "XXXL 下「\(label)」的顶边跑到屏幕上沿之外（\(Int(frame.minY))）"
+            )
+            XCTAssertTrue(
+                button.isHittable,
+                "XXXL 下滚到底仍点不到「\(label)」—— 它被别的元素挡住了"
+            )
+
+            XCTAssertGreaterThan(
+                frame.width / max(frame.height, 1), 1.2,
+                "「\(label)」在 XXXL 下被压成了竖排（\(Int(frame.width))×\(Int(frame.height))）"
+            )
+        }
+
+        // 上面那段只保证两个按钮露出来了，**没有证明这一屏能滚到底**。
+        //
+        // 截图里看得很清楚：按钮下方还露出半行「现在到哪一步了」被 tab bar 切住，
+        // 而「先不评了」根本看不到。也就是说这个用例从来没验证过
+        // XXXL 下这块内容的底部留白够不够 —— 它只验证了"滚两次能看到按钮"。
+        let (tabTop, contentBottom) = scrollToBottomAndMeasure("remote-handover-xxxl")
+        XCTAssertGreaterThan(tabTop, 0, "取不到 tab bar 顶边，测量无效")
+        XCTAssertLessThanOrEqual(
+            contentBottom, tabTop,
+            "XXXL 下远程交接页滚到底后，最后一行内容（底边 \(Int(contentBottom))）仍被 tab bar（顶边 \(Int(tabTop))）遮住"
+        )
+        XCTAssertTrue(
+            hasText("先不评了"),
+            "XXXL 下滚到底仍看不到「先不评了」—— 大字号用户没有退出路径"
+        )
+
+        capture("04e-case-remote-handover-xxxl")
+
+        // 错误提示必须是中文。
+        //
+        // 截图实测到过一条：网络不通时屏幕上写着
+        // 「A server with the specified hostname could not be found.」
+        // —— 一个全中文界面里突然出现系统英文报错，用户既看不懂也不知道怎么办。
+        // 这条断言只在屏幕上已有错误条时生效，没有错误条时自动跳过。
+        let englishError = app.staticTexts.containing(
+            NSPredicate(format: "label MATCHES %@", ".*[A-Za-z]{4,} .*[A-Za-z]{4,}.*")
+        ).allElementsBoundByIndex.filter { $0.exists && isOnScreen($0) }
+
+        for element in englishError {
+            let label = element.label
+            // 白名单：链接本身、域名、以及产品名都不算"未翻译的错误"。
+            let allowed = label.contains("invite.")
+                || label.contains("example.com")
+                || label.contains("TA")
+                || label.contains("AI")
+            XCTAssertTrue(
+                allowed,
+                "屏幕上出现了疑似未翻译的英文错误：「\(label)」—— 面向用户的提示必须是中文"
+            )
+        }
     }
 
     func test_case_ready() throws {

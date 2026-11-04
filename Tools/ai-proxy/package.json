@@ -1,0 +1,10 @@
+{
+  "name": "relcopilot-proxy",
+  "private": true,
+  "type": "module",
+  "description": "关系副驾的 AI 代理与评理邀请中转。零运行时依赖，只有 wrangler 用于部署。",
+  "scripts": {
+    "test": "node worker.test.mjs && node invite.test.mjs",
+    "deploy": "wrangler deploy"
+  }
+}

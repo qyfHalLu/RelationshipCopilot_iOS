@@ -22,6 +22,10 @@ struct DisputeFlowView: View {
 
     @State private var model: DisputeFlowModel?
     @State private var errorMessage: String?
+    /// 代理根地址。在 `.task` 里解析一次并缓住 ——
+    /// 每次重绘都去读 Info.plist + Keychain 是没必要的，而且
+    /// Keychain 读取在锁屏未解锁时会失败，会让链接时有时无。
+    @State private var proxyBaseURL: URL?
 
     var body: some View {
         ZStack {
@@ -47,6 +51,26 @@ struct DisputeFlowView: View {
                 // 用户重复点击会再生成一条内容完全相同的承诺。
                 resolved.restoreAdoptedState(from: disputeCase)
                 model = resolved
+            }
+            if proxyBaseURL == nil {
+                // 测试注入优先：否则 UI 测试环境里 Info.plist 的代理地址是空的，
+                // 远程交接屏会永远落到"链接没生成成功"那条兜底路径上，
+                // 正常路径一次都截不到 —— 而断言照样会过。
+                let resolved: URL?
+                if let injected = UITestSupport.overriddenProxyBaseURL, let url = URL(string: injected) {
+                    resolved = url
+                } else {
+                    resolved = InviteService().proxyBaseURL
+                }
+                proxyBaseURL = resolved
+
+                // 关键：把同一个地址交给模型，让它内部构造的 InviteService 用这个。
+                //
+                // 早先模型自己 new 一个 InviteService，那一层会**再解析一次**
+                // endpoint。两次解析在"Info.plist 空、但地址来自注入"时会分叉：
+                // 拼链接用的是注入地址，发请求时却拿到 nil，
+                // 界面上表现为链接卡片一切正常、一点刷新弹出配置错误。
+                model?.inviteService = InviteService(baseURL: resolved)
             }
         }
         .alert("出了点问题", isPresented: Binding(
@@ -77,7 +101,16 @@ struct DisputeFlowView: View {
             collectingScreen(model: model)
 
         case .waitingForB:
-            handoverScreen(model: model)
+            // 两种模式在这一步做的事完全不同，所以不能复用同一屏：
+            //   · 同机 → 把手机递给对方，这一屏要**尽量空**（上一份内容刚被盖上，
+            //     任何停留都在延长暴露时间）；
+            //   · 远程 → 对方在另一台设备上，这一屏要长期停留（可能几小时），
+            //     必须承载"链接在哪、TA 到哪一步了、现在能做什么"。
+            if disputeCase.mode.requiresCounterpartDevice {
+                remoteHandoverScreen(model: model)
+            } else {
+                handoverScreen(model: model)
+            }
 
         case .ready:
             readyScreen(model: model)
@@ -119,6 +152,10 @@ struct DisputeFlowView: View {
         case .sameDevice:
             return author == .a
                 ? "写完后这份内容会锁住，交给对方时不会显示在屏幕上。对方写的时候，你也看不到他在写什么。"
+                : "这是最后一份。写完就能一起看结果了。"
+        case .remote:
+            return author == .a
+                ? "写完后会生成一个链接。发给 TA，TA 在自己手机上写，写什么你在提交前看不到。"
                 : "这是最后一份。写完就能一起看结果了。"
         case .solo:
             return "这里只有你一个人在写，所以待会儿给你的只会是你自己的梳理，不会有「谁对谁错」。"
@@ -198,7 +235,60 @@ struct DisputeFlowView: View {
         .padding(.horizontal, ThemeManager.Spacing.lg)
     }
 
-    // MARK: 待生成
+    // MARK: 等对方在自己手机上写（远程）
+
+    //
+    // 这一屏的难点不在排版，在于**它可能要停留几天**。
+    // 所以它必须能自己查出进展，而不是要求用户不断回来点刷新 ——
+    // 但也不能无节制地打服务器（每次都是一次网络往返 + 一次配额消耗）。
+    //
+    // 折中：进入时查一次，之后每 20 秒查一次，最多 15 次（约 5 分钟）。
+    // 之后交给用户手点。理由：会回来点的人一定在看屏幕，
+    // 而真正离开的人（这才是常态）不需要我们在后台烧请求。
+
+    private func remoteHandoverScreen(model: DisputeFlowModel) -> some View {
+        let link = disputeCase.inviteLink
+        let url = (link != nil && proxyBaseURL != nil) ? link?.url(proxyBaseURL: proxyBaseURL!) : nil
+
+        return RemoteHandoverView(
+            inviteURL: url,
+            status: model.inviteStatus,
+            isRefreshing: model.isRefreshingInvite,
+            errorMessage: model.inviteErrorMessage,
+            relationshipLabel: disputeCase.profile?.relationship.displayName,
+            onRefresh: {
+                Task {
+                    _ = await model.refreshInvite(for: disputeCase, context: modelContext)
+                }
+            },
+            onCopy: {
+                if let url { UIPasteboard.general.string = url.absoluteString }
+            },
+            onSwitchToSameDevice: {
+                model.switchToSameDevice(disputeCase, context: modelContext)
+            },
+            onCancel: { dismiss() }
+        )
+        .task {
+            // 进来先查一次：用户可能是从"通知/昨天打开过"回来的，
+            // 对方早就写完了，不该让他先手动点一下才知道。
+            _ = model.ensureInviteLink(for: disputeCase, context: modelContext)
+            await pollInvite(model: model)
+        }
+    }
+
+    /// 进入后的自动轮询。
+    private func pollInvite(model: DisputeFlowModel) async {
+        for attempt in 0 ..< 15 {
+            if Task.isCancelled { return }
+            let done = await model.refreshInvite(for: disputeCase, context: modelContext)
+            if done { return }
+            // 第一次失败通常是网络/配置问题，已经写进 inviteErrorMessage，
+            // 不必再空转 15 轮。
+            if attempt == 0, model.inviteErrorMessage != nil { return }
+            try? await Task.sleep(for: .seconds(20))
+        }
+    }
 
     private func readyScreen(model: DisputeFlowModel) -> some View {
         VStack(spacing: ThemeManager.Spacing.xl) {
@@ -265,6 +355,10 @@ struct DisputeFlowView: View {
         switch disputeCase.mode {
         case .sameDevice:
             return "现在请两个人一起看屏幕。\n接下来出现的内容不是判谁对谁错，是说清你们各自卡在哪。"
+        case .remote:
+            // 远程模式下"一起看屏幕"是做不到的 —— 对方在另一台设备上。
+            // 所以这里要给用户一句该怎么做，而不是一句做不到的话。
+            return "接下来出现的内容不是判谁对谁错，是说清你们各自卡在哪。\n你可以把结果发给 TA，也可以先自己看一遍。"
         case .solo:
             return "接下来只给你自己的梳理。\n因为你只写了一份，它不会假装知道对方怎么想。"
         }

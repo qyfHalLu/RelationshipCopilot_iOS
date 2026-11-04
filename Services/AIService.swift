@@ -334,7 +334,7 @@ final class AIService: ConversationAnalyzing, DisputeEvaluating {
         )
         let userMessage: String
         switch request.mode {
-        case .sameDevice:
+        case .sameDevice, .remote:
             // gate 已保证 sideB 非 nil；这里仍做兜底，避免坐标外调用泄露单方数据
             guard let sideB = request.sideB else { throw AppError.malformedAIResponse("缺少第二份证词") }
             userMessage = DisputePrompt.sameDeviceUserMessage(a: request.sideA, b: sideB)

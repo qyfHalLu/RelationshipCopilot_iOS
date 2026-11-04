@@ -45,6 +45,19 @@ enum TelemetryEvent: String, CaseIterable, Sendable {
     /// 这是本产品相对参考产品（判决即终止）唯一的留存机制，
     /// 混进 `promiseCreated` 就再也看不出这条链通不通。
     case disputeAdoptedAsPromise
+
+    // 远程邀请（跨设备收集对方那份证词）
+    /// 生成了邀请链接。
+    case disputeInviteCreated
+    /// 成功取回并解开了对方那份。
+    case disputeInviteReceived
+    /// 从远程模式退回同一台手机。
+    ///
+    /// 这个事件值得单独记：它是**该模式失败率的直接度量**。
+    /// 如果它和 `disputeInviteCreated` 的比值很高，说明链接这条路径
+    /// 在真实关系场景里走不通（对方不点、或者点了不写），
+    /// 那时该改的是产品假设，而不是界面文案。
+    case disputeInviteAbandoned
 }
 
 @MainActor
