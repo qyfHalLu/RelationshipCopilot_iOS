@@ -122,20 +122,17 @@ schemes:
       targets:
         - RelationshipCopilotTests
         - RelationshipCopilotUITests
-      # 内测构建标志。
+      # 这里**不再**注入内测标志。
       #
-      # `ReleaseGateTests` 有一条断言盯着 Info.plist 的 `RCAllowBetaSkipAuth`：
-      #   · 没设这个变量 → 要求开关**关闭**（发版状态）
-      #   · 设 RC_BETA_BUILD=1 → 要求开关**打开**（内测状态）
+      # 曾经在这里写过 `environmentVariables: RC_BETA_BUILD: "1"`，
+      # 目的是让 `ReleaseGateTests` 区分内测/发版两条路。它有两个问题：
       #
-      # 现在仓库里是打开的内测状态，所以这里声明内测。
-      # 真到发版那天，删掉这里 + 把 Info.plist 改成 false，两处必须一起动；
-      # 只改一处会让测试红 —— 那正是它存在的意义。
+      #   1. scheme 里的变量会**覆盖** shell 传入的同名变量，
+      #      而且无法从 shell 取消（传空串也覆盖）；
+      #   2. 于是"发版那条断言"永远执行不到 —— 守门是死的，但显示为绿。
       #
-      # 注意：必须写在 scheme 的 test 段。写在 target 的 scheme 下
-      # 只会生成到 RelationshipCopilotTests.xcscheme 里，而没人用它跑测试。
-      environmentVariables:
-        RC_BETA_BUILD: "1"
+      # 现在改用仓库根的 `BETA_BUILD` 标记文件判断（见 `ReleaseGateTests`）。
+      # 删一个文件的动作在 git diff 里看得见，比"记得别设某个变量"可靠。
     profile:
       config: Release
     analyze:

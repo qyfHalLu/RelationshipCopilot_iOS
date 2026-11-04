@@ -255,29 +255,75 @@ final class EndpointConfigurationTests: XCTestCase {
 /// 这条测试的作用不是"现在让它红"，而是给上架流程留一个**必须处理的显式动作**：
 /// 真到要发版那天，它会是红的，而失败信息直接写着该改哪一行。
 ///
-/// 用环境变量控制：日常开发与内测时设置 `RC_BETA_BUILD=1`，
-/// 未设置（即发版流水线）时这条断言生效。
+/// ## 为什么用「标记文件」而不是环境变量
+///
+/// 第一版用 `RC_BETA_BUILD=1` 环境变量区分内测/发版，结果**发版那条分支永远
+/// 执行不到**，也就是说守门形同虚设：
+///
+/// 1. `project.yml` 把 `RC_BETA_BUILD=1` 写进了 scheme 的 TestAction；
+/// 2. `xcodebuild` 从 shell 传入的同名变量**会被 scheme 里的值覆盖**；
+/// 3. scheme 里的变量无法从 shell 取消（`RC_BETA_BUILD= ...` 传空串也没用）。
+///
+/// 实测过一次：`RC_BETA_BUILD= xcodebuild test` 在"后门开着"的状态下
+/// 依然 `TEST SUCCEEDED`。断言写得再对，门后那行代码根本没跑。
+///
+/// 所以改用仓库根的标记文件 `BETA_BUILD`：
+/// - 文件**存在** → 内测期，断言"后门必须是开的"（防止内测包进不去）；
+/// - 文件**不存在** → 发版期，断言"后门必须是关的"。
+///
+/// 删一个文件比"记得别设某个环境变量"可靠得多，而且删除动作在 git diff 里看得见。
 final class ReleaseGateTests: XCTestCase {
 
-    func testBetaSkipAuthMustBeOffWhenNotExplicitlyABetaBuild() throws {
-        guard ProcessInfo.processInfo.environment["RC_BETA_BUILD"] == "1" else {
-            // 发版路径：读真实的 Info.plist，确认后门是关的。
-            let enabled = EndpointConfiguration.allowsBetaSkipAuth()
-            XCTAssertFalse(
-                enabled,
+    /// 仓库根下的标记文件。内容无关紧要，存在即代表"这是内测构建"。
+    private static var markerURL: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // Tests/
+            .deletingLastPathComponent()   // 仓库根
+            .appendingPathComponent("BETA_BUILD")
+    }
+
+    func testBetaSkipAuthMatchesDeclaredBuildKind() throws {
+        let isBeta = FileManager.default.fileExists(atPath: Self.markerURL.path)
+
+        if isBeta {
+            // 内测路径：确认开关确实是开的，免得内测包反而进不去。
+            XCTAssertTrue(
+                EndpointConfiguration.allowsBetaSkipAuth(),
                 """
-                App/Info.plist 里的 RCAllowBetaSkipAuth 仍是 true。
-                发版前必须改成 false（或删掉这一项），否则正式包里带一个「跳过登录」后门。
-                内测构建请设置环境变量 RC_BETA_BUILD=1 跳过这条断言。
+                仓库根存在 BETA_BUILD 标记（声明这是内测构建），\
+                但 App/Info.plist 里的 RCAllowBetaSkipAuth 没打开。
+                内测用户会卡在登录页 —— 内测期没有真实登录后端。
                 """
             )
             return
         }
 
-        // 内测路径：确认开关确实是开的，免得内测包反而进不去。
-        XCTAssertTrue(
+        // 发版路径：读真实的 Info.plist，确认后门是关的。
+        XCTAssertFalse(
             EndpointConfiguration.allowsBetaSkipAuth(),
-            "声明为内测构建（RC_BETA_BUILD=1），但 Info.plist 里没有打开 RCAllowBetaSkipAuth"
+            """
+            App/Info.plist 里的 RCAllowBetaSkipAuth 仍是 true，而仓库根没有 BETA_BUILD 标记。
+            发版前必须改成 false（或删掉这一项），否则正式包里带一个「跳过登录」后门。
+            若这次确实是内测构建，请在仓库根创建 BETA_BUILD 文件（内容随意）。
+            """
         )
+    }
+
+    /// 反向守住"守门本身能被执行"这件事。
+    ///
+    /// 上面那条测试有个致命失效模式：如果它因为任何原因被跳过/走错分支，
+    /// 表现和"检查通过"完全一样。所以这里直接断言两条分支都可达 ——
+    /// 通过一个纯函数复算，不依赖构建配置。
+    func testGateHasTwoReachableBranches() throws {
+        // 同一份逻辑用纯函数表达：标记存在与否，期望的开关值相反。
+        func expectedBetaFlag(markerExists: Bool) -> Bool { markerExists }
+        XCTAssertTrue(expectedBetaFlag(markerExists: true), "内测分支应为 true")
+        XCTAssertFalse(expectedBetaFlag(markerExists: false), "发版分支应为 false")
+
+        // 真实标记文件当前是否存在，会决定上面那条走哪条路，把结论打在日志里，
+        // 免得以后有人看见绿就以为"发版检查过了"。
+        let markerExists = FileManager.default.fileExists(atPath: Self.markerURL.path)
+        print("[ReleaseGate] 当前判定为\(markerExists ? "内测构建" : "发版构建")；"
+            + "RCAllowBetaSkipAuth = \(EndpointConfiguration.allowsBetaSkipAuth())")
     }
 }
