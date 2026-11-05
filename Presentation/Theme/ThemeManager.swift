@@ -252,15 +252,9 @@ extension View {
         modifier(SurfaceCardModifier(cornerRadius: cornerRadius, padding: padding))
     }
 
-    func gradientBackground() -> some View {
-        background(
-            LinearGradient(
-                colors: [ThemeManager.Colors.gradientStart, ThemeManager.Colors.gradientEnd],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-    }
+    // 说明：`gradientBackground()` 已删除（全仓库零调用）。
+    // `Colors.gradientStart/gradientEnd` **仍然在用** —— 登录页和快捷工具的
+    // 渐变卡片直接引用了它们，不要跟着一起删。
 
     /// 只在需要时显示（避免 `if` 造成的视图身份变化）。
     @ViewBuilder

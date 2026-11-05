@@ -312,9 +312,7 @@ enum RepairLinter {
         needles.first { text.contains($0) }
     }
 
-    private static func trimmedCount(_ text: String) -> Int {
-        text.trimmingCharacters(in: .whitespacesAndNewlines).count
-    }
+    // 说明：`trimmedCount(_:)` 已删除（全仓库零调用）。
 
     // MARK: 第 1 步：只写动作
 

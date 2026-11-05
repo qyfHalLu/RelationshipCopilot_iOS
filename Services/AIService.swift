@@ -17,7 +17,6 @@
 //
 
 import Foundation
-import SwiftData
 
 // MARK: - 协议
 
@@ -255,33 +254,21 @@ final class AIService: ConversationAnalyzing, DisputeEvaluating {
         }
     }
 
-    /// 基于历史记录生成综合报告。
-    /// 修复报告 D2：原实现完全不校验配额，是绕过限制的后门；现在与 `analyze` 共用同一配额。
-    func generateHealthReport(
-        for profile: Profile,
-        sessions: [RecordingSession]
-    ) async throws -> AnalysisResult {
-        let transcriptions = sessions
-            .compactMap(\.transcription)
-            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            .prefix(5)
-
-        guard !transcriptions.isEmpty else {
-            // 没有任何真实文本时，不伪造评分。返回不含分数的空壳，由 UI 引导用户去录音。
-            return AnalysisResult()
-        }
-
-        return try await analyze(
-            conversation: transcriptions.joined(separator: "\n---\n"),
-            counterpartName: profile.name,
-            relationshipType: profile.relationship
-        )
-    }
-
-    func resetDailyQuota() {
-        usedToday = 0
-        persistQuota()
-    }
+    // ## 已删除：`generateHealthReport(for:sessions:)` 与 `resetDailyQuota()`
+    //
+    // 两个都是全仓库零调用的死代码，删掉共约 26 行。
+    //
+    // `generateHealthReport` 值得一提：它的 doc 注释写着
+    // 「原实现完全不校验配额，是绕过限制的后门；现在与 analyze 共用同一配额」。
+    // 这句话描述的是一个**已经不存在的问题** —— 留着它，后来者会以为
+    // 这个后门还在，或者以为这个方法还在被调用、还在承担配额守门职责。
+    // 实际上所有分析入口（`analyze` / `quickTool` / `evaluate`）都各自
+    // 直接做了配额校验，不经过这里。
+    //
+    // `resetDailyQuota` 是唯一能手动清零当日配额的方法。删它的判断依据：
+    // 配额跨天会自动重置（`checkAndResetDailyQuota`），服务端另有独立的
+    // 每日限流兜底，所以不存在"配额永久卡死"的死锁。若将来要在设置页
+    // 加一个内测用的重置开关，把它加回来只需三行（清零 + `persistQuota()`）。
 
     // MARK: - 评理（第三方之见）
     //

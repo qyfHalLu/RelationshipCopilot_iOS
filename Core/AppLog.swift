@@ -23,13 +23,11 @@ enum AppLog {
 }
 
 /// 隐私安全的日志辅助：不打印录音文本、手机号等敏感内容。
+///
+/// 说明：原先这里还有一个 `textLength(_:)`（只记录文本长度），全仓库零调用，
+/// 已删除。`maskedPhone` 是真正在用的一条 —— 登录页和「我的」页面都靠它
+/// 把手机号显示成 `138****8888`，删它会把完整手机号暴露在界面上。
 enum SafeLog {
-    /// 只记录长度，不记录内容。
-    static func textLength(_ text: String?) -> String {
-        guard let text else { return "nil" }
-        return "\(text.count) chars"
-    }
-
     /// 手机号脱敏：138****8888。
     static func maskedPhone(_ phone: String) -> String {
         guard phone.count >= 7 else { return "***" }

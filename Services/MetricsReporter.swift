@@ -15,7 +15,6 @@
 
 import Foundation
 import MetricKit
-import os
 
 /// 一条指标摘要，字段保持最小集，便于后续上报。
 struct MetricSnapshot: Codable, Sendable, Equatable {

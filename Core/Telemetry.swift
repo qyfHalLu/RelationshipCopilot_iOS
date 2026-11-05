@@ -100,9 +100,7 @@ final class Telemetry {
         defaults.integer(forKey: prefix + event.rawValue)
     }
 
-    func hasEverFired(_ event: TelemetryEvent) -> Bool {
-        count(of: event) > 0
-    }
+    // 说明：`hasEverFired(_:)` 已删除（全仓库零调用，等价于 `count(of:) > 0`）。
 
     var firstLaunchAt: Date? {
         defaults.object(forKey: firstLaunchKey) as? Date

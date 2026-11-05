@@ -1,6 +1,5 @@
 import Foundation
 import UserNotifications
-import UIKit
 
 // MARK: - 通知服务
 //
@@ -152,13 +151,10 @@ final class NotificationService: NSObject {
         }
     }
 
-    func setBadge(_ count: Int) {
-        UNUserNotificationCenter.current().setBadgeCount(max(0, count)) { error in
-            if let error {
-                AppLog.notification.error("Set badge failed: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-    }
+    // 说明：`setBadge(_:)` 已删除（全仓库零调用）。
+    // 本 App **不使用未读计数角标** —— 角标只有"清零"一个方向，
+    // 由 `clearBadge()` 承担（3 处真实调用：进入前台、清空通知、数据维护）。
+    // 若将来要做未读数，注意 `Info.plist` 不需要额外配置，直接加回来即可。
 
     // MARK: - 清理
 

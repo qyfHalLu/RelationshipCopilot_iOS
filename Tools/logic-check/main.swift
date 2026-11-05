@@ -360,6 +360,49 @@ check("连续查不到才解释同步延迟", copyWaiting2.contains("同步"))
 // 三档必须真的不同，否则"分档"是个空壳
 check("三档文案两两不同", copyWaiting0 != copyWaiting1 || copyWaiting1 != copyWaiting2)
 
+// MARK: - JSON 提取（两处合并后的回归护栏）
+
+// 背景：`DisputeVerdictParser` 原本自带一份 40 行的 `extractJSONObject`，
+// 与 `AIResponseParser` 那份几乎逐字相同，唯一差别是不剥离 markdown 围栏。
+// 合并后靠下面这组用例锁住行为。**离开这些用例，合并就是不可证伪的改动。**
+
+let jsonCases: [(name: String, input: String, expected: String?)] = [
+    ("纯 JSON", #"{"a":1}"#, #"{"a":1}"#),
+    ("围栏 + json 标记", "```json\n{\"a\":1}\n```", #"{"a":1}"#),
+    ("围栏无语言标记", "```\n{\"a\":1}\n```", #"{"a":1}"#),
+    ("围栏 + 前置说明", "好的，结果如下：\n```json\n{\"a\":1}\n```", #"{"a":1}"#),
+    ("围栏 + 后置说明", "```json\n{\"a\":1}\n```\n以上。", #"{"a":1}"#),
+    ("嵌套对象", "```json\n{\"a\":{\"b\":2}}\n```", #"{"a":{"b":2}}"#),
+    ("字符串里的花括号不算层级", #"{"a":"x{y}z"}"#, #"{"a":"x{y}z"}"#),
+    ("转义引号不打乱字符串状态", #"{"a":"say \"hi\""}"#, #"{"a":"say \"hi\""}"#),
+    // ★ 这一条是合并前两版**行为不一致**的那个窄边界：
+    //   旧 DisputeVerdictParser 版会取到 `{见下}`，导致解析出一个空对象再报 missingField。
+    ("围栏前的说明带花括号", "说明{见下}：\n```json\n{\"real\":true}\n```", #"{"real":true}"#),
+]
+
+check("JSON 提取用例数不少于 9", jsonCases.count >= 9)
+
+for c in jsonCases {
+    let got = DisputeVerdictParser.extractJSONObject(from: c.input)
+    check("JSON 提取「\(c.name)」", got == c.expected)
+    // 顺带确认两条路径确实已合并成同一行为
+    check(
+        "JSON 提取「\(c.name)」两处结果一致",
+        AIResponseParser.extractJSONObject(from: c.input) == got
+    )
+}
+
+// 防空跑：若解析器整体失效，上面每一条都会是 nil==非 nil 而失败，不会假绿。
+// 但要额外确认"至少有一条真的取到了东西"，排除"全 nil 也算一致"。
+check(
+    "JSON 提取至少一条产出非空",
+    jsonCases.contains { DisputeVerdictParser.extractJSONObject(from: $0.input) != nil }
+)
+
+// 取不到时必须返回 nil 而不是空串或原文
+check("无花括号返回 nil", DisputeVerdictParser.extractJSONObject(from: "完全没有 JSON") == nil)
+check("花括号不闭合返回 nil", DisputeVerdictParser.extractJSONObject(from: #"{"a":1"#) == nil)
+
 print("")
 print("────────────── 汇总 ──────────────")
 print("通过 \(passed) 项，失败 \(failures.count) 项")

@@ -169,40 +169,26 @@ enum DisputeVerdictParser {
     }
 
     // MARK: - JSON 提取
-    //
-    // 模型常见输出形态：纯 JSON / ```json 包裹 / "好的，结果如下：{...}"。
-    // 只取第一个完整的顶层花括号块，避免把解释文字当 JSON。
 
+    /// 转调 `AIResponseParser.extractJSONObject(from:)`。
+    ///
+    /// ## 为什么不各留一份
+    ///
+    /// 这里原本有一份 40 行的独立实现，与 `AIResponseParser` 里那份几乎逐字相同。
+    /// 两处唯一的差别是：本文件版本**不剥离 markdown 围栏**，直接从第一个 `{` 开始。
+    ///
+    /// 实测这个差别的影响面比想象中窄（不是「模型给围栏就解析失败」）：
+    ///
+    /// | 输入 | 行为 |
+    /// |---|---|
+    /// | `{"a":1}` | 两者相同 |
+    /// | ` ```json\n{"a":1}\n``` ` | **两者相同**（围栏标记里没有 `{`，从第一个 `{` 起提取照样对） |
+    /// | `好的：\n```json\n{"a":1}\n``` ` | 两者相同 |
+    /// | `说明{见下}：\n```json\n{"real":true}\n``` ` | **分叉**：本文件版取到 `{见下}` |
+    ///
+    /// 所以它不是高频故障，而是「围栏前恰好出现带花括号的说明文字」这一窄边界上更脆弱。
+    /// 合并之后这段脆弱面消失，且该路径的回归用例进了 `logic-check`。
     static func extractJSONObject(from text: String) -> String? {
-        guard let start = text.firstIndex(of: "{") else { return nil }
-
-        var depth = 0
-        var inString = false
-        var escaped = false
-        var index = start
-
-        while index < text.endIndex {
-            let character = text[index]
-
-            if escaped {
-                escaped = false
-            } else if character == "\\" && inString {
-                escaped = true
-            } else if character == "\"" {
-                inString.toggle()
-            } else if !inString {
-                if character == "{" {
-                    depth += 1
-                } else if character == "}" {
-                    depth -= 1
-                    if depth == 0 {
-                        return String(text[start...index])
-                    }
-                }
-            }
-
-            index = text.index(after: index)
-        }
-        return nil
+        AIResponseParser.extractJSONObject(from: text)
     }
 }

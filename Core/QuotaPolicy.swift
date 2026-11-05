@@ -44,7 +44,6 @@ struct QuotaSnapshot: Codable, Sendable, Equatable {
     var used: Int
     var lastResetDay: Date
 
-    static func fresh(today: Date = Date()) -> QuotaSnapshot {
-        QuotaSnapshot(used: 0, lastResetDay: Calendar.current.startOfDay(for: today))
-    }
+    // 说明：`fresh(today:)` 已删除（全仓库零调用）。
+    // 快照的实际生成在 `AIService.checkAndResetDailyQuota()` 里。
 }

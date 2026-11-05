@@ -87,10 +87,12 @@ struct DisputeRequest: Equatable, Sendable {
         )
     }
 
-    /// 提交前的完整性校验（与 UI 的按钮可用性共用同一个判断）。
-    func gateRejection(state: DisputeCaseState) -> DisputeCaseGate.Rejection? {
-        DisputeCaseGate.check(state: state, mode: mode, sideA: sideA, sideB: sideB)
-    }
+    // 说明：原先这里有一个 `gateRejection(state:)`，注释写的是
+    // "与 UI 的按钮可用性共用同一个判断"，但 UI **并没有用它** ——
+    // `DisputeFlowModel` 直接调 `DisputeCaseGate.check(...)`，
+    // 这一层转发全仓库零调用，已删除。
+    //
+    // 校验规则本身仍在 `DisputeCaseGate.check`，那是唯一入口。
 }
 
 // MARK: - 能力协议
