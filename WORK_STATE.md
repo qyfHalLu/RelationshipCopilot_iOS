@@ -12,8 +12,8 @@
 > - 「进行中」和「已完成并验证」必须严格分开。写完但没跑的，一律算未完成。
 > - 上一轮留下的"进行中"如果没有结论，接手时**先复跑一次验证**，不要相信文字。
 
-**最后一次更新**：2026-11-05 12:25
-（上一轮误记为 12:55，比实际时间快了半小时，此处按系统时间校正。）
+**最后一次更新**：2026-11-05 13:45
+（历次误记过 12:55 / 12:25。本轮以 `date` 实测时间为准，别再手写推算。）
 
 ---
 
@@ -21,13 +21,14 @@
 
 ### ① 真机核验 —— **只剩这件事，只能由用户做**
 
-三代提交全部推送且 CI 全绿：
+四代提交全部推送，前三个 CI 全绿，`de0d31b` 待 CI：
 
 | 提交 | 内容 | CI |
 |---|---|---|
 | `f77d9ac` | 浅色主题对比度 1.06:1（题号看不见） | success |
 | `ed4298c` | 「TA 还没提交」→ 改为只说观察到的 | success |
 | `759cf49` | 记录「首屏半行」是假缺陷的实测坐标 | success `41963264975` |
+| `de0d31b` | 清理死代码 + 合并重复 JSON 提取 | `41975244229` |
 
 本机能验的全部验完了，逐项证据：
 
@@ -50,7 +51,58 @@
 **需要用户做**：手机微信打开一条真实 https 邀请链接，确认四题出现 /
 输入的字看得见 / 提交有反馈 / 按钮没被手势条压住。
 
-#### 巡检记录（2026-11-05 12:25，第 N 轮定时巡检）
+#### 巡检记录（2026-11-05 13:27 起，本轮）
+
+**状态判断：不是「无待办」，也不是「中断未恢复」—— 是并发。**
+
+进入时 `resume-brief.sh` 报「未提交 5 个 Core 文件、领先远端 0、
+最后更新 12:25（62 分钟前）」，按规则 3 本该判为中断。**但继续查发现不是**：
+
+- 实际是**另一个会话/进程正在同时干活**，它在 13:38 提交了 `de0d31b`
+  并推送，CI `41975244229` **success**（5m55s）。
+- 我逐项核过 `de0d31b` 的内容与自己的结论一致：那 5 个函数确为全仓库零真实
+  调用（`grep` 全子目录 + 删后 `xcodebuild` 双确认），删得对。
+- 教训：`resume-brief.sh` 只看「未提交 + 领先远端」，**看不出工作区正在被
+  另一个进程改写**。判「中断」前应先看 `git log` 有没有比简报所报 HEAD 更新的提交。
+
+**本轮真正新增的增量：一处会误导人的注释。**
+
+`Core/QuotaPolicy.swift` 里 `de0d31b` 留下的说明是：
+
+> `QuotaSnapshot.fresh` 已删除；**快照的实际生成在 `AIService.checkAndResetDailyQuota()` 里**。
+
+前半句对（确实零调用），**后半句是错的**。实测：
+
+- `checkAndResetDailyQuota()`（`Services/AIService.swift:692`）读写的是
+  UserDefaults 两个独立键（`Keys.used` / `Keys.lastDay`，见 `persistQuota()`），
+  **从不构造 `QuotaSnapshot`**。
+- 并且 `QuotaSnapshot` **这个类型本身**也全仓库零引用（`grep` 只命中它自己的定义）。
+  顺带发现文件头提到的 `AIQuotaStore` 也**不存在**，同样只出现在注释里。
+
+已把该注释改成事实描述，并写明「删整个类型属另一次增量，见待办」。
+**没有删类型**——本轮只做一个可验证增量。
+
+**验证（都真跑了，不是推断）**：
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 闸门六步 | `verify-fast.sh` | 全绿（worker 61 / invite 55 / 对比度五组 ≥4.5） |
+| Swift 编译 | `xcodebuild build`（`DEVELOPER_DIR=/Applications/Xcode.app/...`） | **BUILD SUCCEEDED**，0 warning |
+| 单测 | `-only-testing:RelationshipCopilotTests` | **237 项 0 失败** |
+| UI 测试 | 全 scheme | **45 项 0 失败**，2 项缺 `RC_TEST_AI_KEY` 按设计跳过 |
+| 零调用复核 | `grep` 全仓库（含所有子目录，非仅根目录） | 只命中注释，无真实调用 |
+
+**环境坑（新发现，记下来别重踩）**：
+`xcodebuild` 直接调会报 `requires Xcode, but active developer directory is
+CommandLineTools`。本机装的是 **Xcode 27.2**，必须前缀
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`，**不要**去跑
+`xcode-select --switch` 改全局设置。另外：**没有 iPhone 16 这个模拟器**，
+可用的是 iOS 27.0 的 `iPhone 18 Pro` / `iPhone 17` 等，写错设备名会静默
+回退到 `My Mac` 并报 platform 不匹配。
+
+本轮无界面改动，故未截图（`shoot-invite-page.mjs` 不适用）。
+
+#### 巡检记录（2026-11-05 12:25，上一轮）
 
 - `resume-brief.sh`：未提交 0 个、领先远端 0 个、HEAD `326e55e`。
 - `verify-fast.sh`：**六步全绿**（Core 清单一致 / 冒烟 / worker 61 + invite 55 /
@@ -64,6 +116,63 @@
 ---
 
 ## 已完成并验证（不要重复做）
+
+### `de0d31b` 已推送 —— 代码质量清理（用户要求"全部执行"）
+
+**A 类：删 10 处零引用函数（约 65 行）**
+
+| 位置 | 函数 | 判断依据 |
+|---|---|---|
+| `Core/AppLog.swift` | `SafeLog.textLength` | 全仓库零调用 |
+| `Core/DisputeEvaluation.swift` | `DisputeRequest.gateRejection(state:)` | 纯转发；UI 直接调 `DisputeCaseGate.check` |
+| `Core/GuidedRepair.swift` | `RepairLinter.trimmedCount` | 私有且零调用 |
+| `Core/Telemetry.swift` | `hasEverFired(_:)` | 等价于 `count(of:) > 0`，无人用 |
+| `Core/QuotaPolicy.swift` | `QuotaSnapshot.fresh(today:)` | 实际生成在 `checkAndResetDailyQuota` |
+| `Presentation/Theme/ThemeManager.swift` | `View.gradientBackground()` | 零调用 |
+| `Services/AIService.swift` | `generateHealthReport(for:sessions:)` | 零调用 |
+| `Services/AIService.swift` | `resetDailyQuota()` | 零调用；跨天自动重置，无死锁 |
+| `Services/NotificationService.swift` | `setBadge(_:)` | 零调用；本 App 只用 `clearBadge()` |
+
+每处原位留说明，写清「为什么没被用」+「将来怎么加回来」。
+
+**B 类：合并 `extractJSONObject`（40 行 → 1 行转调）**
+
+⚠️ **这里纠正了一条上一轮的误判，务必记住**：
+上一轮我说「`DisputeVerdictParser` 版不剥围栏，模型给 ``` 就解析失败」——
+**实测不成立**。围栏标记（`json` / 空）里没有 `{`，从第一个 `{` 起提取照样正确。
+真正的分叉只有一个窄边界：**围栏前恰好出现带花括号的说明文字**
+（`说明{见下}：\n```json\n...``` ` → 旧版取到 `{见下}`）。
+定性从「高频故障」改为「窄边界更脆弱」，但仍然值得合并。
+
+**测试**：`logic-check` 补 22 条断言（9 个输入 × 2 + 4 条兜底）。
+反向验证注入旧实现 → **精确失败 2 项**（正是那条边界用例），
+其余 120 项全绿 → 证明断言非恒真；还原后 122 项全绿。
+
+**C 类：删 4 处未使用 import**
+`AuthenticationService`(CryptoKit) / `MetricsReporter`(os)
+/ `NotificationService`(UIKit) / `AIService`(SwiftData)
+
+### ⚠️ 踩坑：`import StoreKit` **不能删**
+`SettingsView` 的 `@Environment(\.requestReview)` 里，`RequestReviewAction`
+是 StoreKit 提供的。删掉 import 直接编译失败（`generic parameter 'Value'
+could not be inferred`）。
+**为什么静态检查查不出来**：我用 `grep "StoreKit|Product|purchase|Transaction"`
+查使用情况，这种**间接类型引用完全命中不到**。
+**今后规则**：判断 import 是否可删，一律以「删掉后 `xcodebuild`」为准，
+不以静态 grep 为准。这次是靠编译当场抓住的，不是靠推理。
+
+### 两处**主动偏离**原清理建议（已确认保留）
+
+- **`Promise.reopen()`**：`close()` 是达标后**自动触发**的
+  （`ContentView.swift:357-359`），用户没有选择余地。`reopen()` 是这条自动
+  路径**唯一的撤销入口**，删掉会把「自动关闭后无法恢复」变成永久缺陷。
+- **`SafeLog.maskedPhone()`**：我上一轮误判为「零调用」，实际有 2 处真实调用
+  （`AuthenticationView.swift:170`、`MeView.swift:132`）。删了会把完整手机号
+  直接显示在界面上。**教训**：上一轮的命令只查了根目录，漏了子目录。
+
+### 明确**暂不动**的一类
+`Profile` / `Promise` 上的 `@Model` 死字段 —— 删字段涉及 SwiftData schema
+迁移，风险远大于收益，等有真实用户数据后再评估。
 
 ### `759cf49` 已推送，CI `41963264975` **success**
 
@@ -125,7 +234,8 @@
 
 ## 待办（按优先级）
 
-1. **[高]** 提交 ①② 并推送，确认 CI 绿。
+1. **[高]** ~~提交 ①② 并推送，确认 CI 绿。~~ **已完成**：
+   `de0d31b` 已推送，CI `41975244229` success。此项作废，别再找「①②」是什么。
 2. **[高]** **真机核验 —— 只能由用户做，本机无法替代。**
    本机能验的都验完了（四题渲染 / 409 / 无 WebCrypto 降级 / 两套主题对比度 /
    320px 窄屏），但这两件物理上测不了：
@@ -135,9 +245,19 @@
 
    需要用户用手机微信打开一条真实 https 链接，确认：
    四题出现 / 输入的字看得见 / 提交有反馈 / 按钮没被手势条压住。
-3. **[低]** 若真机发现 X5 不给 WebCrypto，需要考虑兜底路径：
+3. **[中]** 删掉死类型 `QuotaSnapshot`（`Core/QuotaPolicy.swift:42`）。
+   已确认全仓库零引用，且 `AIService` 的配额完全不经过它。
+   **一次做干净**：删类型 → 查 `Tests/*.swift` 里是否有它的单测一并删 →
+   `verify-fast.sh` → `xcodebuild` → 提交。别只删一半。
+   注意：**不是** `de0d31b` 那条注释说的「实际生成在
+   `checkAndResetDailyQuota` 里」，那句是错的，本轮已改掉。
+4. **[中]** `Core/QuotaPolicy.swift` 文件头注释提到 `AIQuotaStore`，
+   但该类型**不存在**。要么把注释改成描述真实的 `AIService` + UserDefaults
+   方案，要么补上这个类型。现在这句会误导人去找一个不存在的文件。
+5. **[低]** 若真机发现 X5 不给 WebCrypto，需要考虑兜底路径：
    现在只做了"告知换浏览器"，没做"降级也能写"。这是已知最大功能缺口。
-4. **[低]** 文档：`README.md` 已更新；`内测上线操作手册.md` 已加 KV 步骤。
+6. **[低]** 文档：`README.md` 已更新；`内测上线操作手册.md` 已加 KV 步骤。
+
 
 ---
 

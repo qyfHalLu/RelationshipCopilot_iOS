@@ -69,6 +69,8 @@ git add -A && git commit -m "<做了什么>"
 | 依赖 Services 的 Core 文件 | 不能进 logic-check（会 `cannot find type`），进 `EXCLUDED` |
 | **新文件不进工程** | 这个工程**不是** `fileSystemSynchronized`，是 XcodeGen 从 `project.yml` 生成的。新 `.swift` 文件不跑 `xcodegen generate` 就**不在 target 里**，编译报 `cannot find 'X' in scope`。危险在于 logic-check 走 `sources.txt`、不受影响 → **闸门全绿但 Xcode 编译失败** |
 | 截图 | 必须带 `-resultBundlePath`，再用 `xcrun xcresulttool export attachments` 导出 |
+| **判断 import 能否删** | **不许用 `grep` 静态查，只能"删掉再 `xcodebuild`"。** 实例：`SettingsView` 里的 `import StoreKit` 看着毫无用处（无 `Product`/`purchase`/`Transaction`），实际 `@Environment(\.requestReview)` 的 `RequestReviewAction` 就是 StoreKit 提供的 —— 删掉立刻 `generic parameter 'Value' could not be inferred`。**间接类型引用静态查不到** |
+| **判断函数是否死代码** | 先 `grep -rn` 查全仓库（含子目录），再**删掉编译**双确认。上一轮只因命令漏了子目录，就把还在用的 `SafeLog.maskedPhone` 判成"零调用" |
 | 断言全绿 | **不代表界面对**。这个项目四次出事都是断言绿、截图坏 |
 | 深色用例 | App 默认就是暗色，测「深色」等于什么都没测，要测**亮色** |
 

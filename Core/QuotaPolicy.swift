@@ -40,10 +40,18 @@ struct QuotaPolicy: Sendable, Equatable {
 }
 
 /// 配额快照（可持久化）。
+///
+/// ⚠️ 本类型**全仓库零引用**，是尚未清理的死代码。真实配额不走这里：
+/// `AIService` 用 UserDefaults 的两个独立键（`Keys.used` / `Keys.lastDay`，
+/// 见 `persistQuota()`）来存，`checkAndResetDailyQuota()` 也只读写那两个键，
+/// **从不构造 `QuotaSnapshot`**。
+///
+/// 注意：本文件头部提到的 `AIQuotaStore` 也已不存在（同样只出现在注释里），
+/// 别把它当成"将来会接管存储"的依据。
+///
+/// 未在本轮删除的原因：本轮增量只清理**函数级**死代码，删整个类型属于
+/// 另一次增量，已记入 `WORK_STATE.md` 待办，不要每轮重新"发现"一次。
 struct QuotaSnapshot: Codable, Sendable, Equatable {
     var used: Int
     var lastResetDay: Date
-
-    // 说明：`fresh(today:)` 已删除（全仓库零调用）。
-    // 快照的实际生成在 `AIService.checkAndResetDailyQuota()` 里。
 }
