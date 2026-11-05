@@ -134,7 +134,7 @@ struct ProfileDetailView: View {
                 TextEditor(text: $note)
                     .frame(minHeight: 80)
                     .accessibilityLabel("备注")
-                VoiceInputButton(text: $note, subject: "备注", compact: true)
+                // 语音输入已按产品要求移除（备注是短文字，见 AddProfileView 同处说明）。
             }
 
             Section("关联内容") {

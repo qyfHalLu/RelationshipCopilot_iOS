@@ -60,10 +60,24 @@ struct GuidedRepairView: View {
         }
         #endif
         let saved = RepairDraftStore.load()
-        // 恢复现场：如果上次答过安全闸门且是"不害怕"，回到当时那一步；
-        // 答过"害怕"就停在资源页 —— 不能让用户重启后被推进道歉流程。
+
+        // ## 恢复现场时的两条路必须分开
+        //
+        // 1. 上次明确答过「不害怕」→ 回到当时那一步，接着写。
+        // 2. 没答过 / 上次答的是「害怕」→ **重新问一次安全闸门**。
+        //
+        // 第 2 条原来写错了：直接把上次的 `fearedReaction == true` 带进来，
+        // 而视图里 `fearedReaction == true` 的优先级高于 `step == .safety`，
+        // 于是一进「道歉准备」就看到「先别急着道歉」——
+        // 用户这一次**什么问题都还没回答**，界面却在替他下结论。
+        // 症状很好认：明明只是想准备一次道歉，开门第一句话是"别急着道歉"。
+        //
+        // 为什么不清空整个草稿：用户上次写的内容是有价值的，
+        // 该重问的只有"你现在怕不怕"这一句 —— 它可能变了，而且它是闸门。
         guard let saved, saved.fearedReaction == false else {
-            return (saved ?? RepairDraft(), .safety)
+            var draft = saved ?? RepairDraft()
+            draft.fearedReaction = nil
+            return (draft, .safety)
         }
         return (saved, RepairStep(rawValue: saved.stepIndex) ?? .action)
     }
@@ -189,7 +203,7 @@ struct GuidedRepairView: View {
                 .foregroundStyle(ThemeManager.Colors.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("怕他发火、怕他报复、怕他冷战好几天。")
+            Text("怕 TA 发火、怕 TA 报复、怕 TA 冷战好几天。")
                 .font(ThemeManager.Typography.caption)
                 .foregroundStyle(ThemeManager.Colors.textSecondary)
 
@@ -244,16 +258,27 @@ struct GuidedRepairView: View {
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("如果情况紧急，可以联系：")
+            // ## 求助信息不能默认对方（或用户）的性别
+            //
+            // 原来这里写的是「全国妇联妇女维权热线 12338」。问题是：
+            // 这个 App 全程用「TA」、明确不假定任何一方的性别，
+            // 却在唯一一处求助入口上假定"需要被帮助的那位是女性"。
+            //
+            // 更实际的问题是覆盖面：家暴、控制、恐吓的受害者不只有女性，
+            // 只给一条妇女热线，等于告诉另一部分用户"这里没有你的入口"。
+            //
+            // 换成两条中性的：
+            //   · 110 —— 人身安全受威胁时唯一正确的动作，无性别前提
+            //   · 12356 —— 国家卫健委的全国统一心理援助热线
+            //     （2025-05-01 起 31 个省级行政区全部接入，免费）
+            VStack(alignment: .leading, spacing: 10) {
+                Text("如果需要有人介入：")
                     .font(ThemeManager.Typography.subheadline)
                     .foregroundStyle(ThemeManager.Colors.textPrimary)
-                Text("全国妇联妇女维权热线 12338")
-                    .font(ThemeManager.Typography.callout)
-                    .foregroundStyle(ThemeManager.Colors.primary)
-                Text("（如果涉及人身安全，请直接拨打 110）")
-                    .font(ThemeManager.Typography.caption)
-                    .foregroundStyle(ThemeManager.Colors.textSecondary)
+
+                hotline(code: "110", note: "人身安全受到威胁时，直接报警")
+
+                hotline(code: "12356", note: "全国心理援助热线，想找人说说话可以打")
             }
 
             Button {
@@ -269,6 +294,23 @@ struct GuidedRepairView: View {
         }
         .padding(ThemeManager.Spacing.md)
         .surfaceCard(cornerRadius: ThemeManager.Radius.lg)
+    }
+
+    /// 一条求助热线：号码 + 一句说明它什么时候用。
+    ///
+    /// 只给号码不给"什么时候打"，对一个正处在慌乱里的人来说等于没有信息。
+    private func hotline(code: String, note: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(code)
+                .font(ThemeManager.Typography.callout.weight(.semibold))
+                .foregroundStyle(ThemeManager.Colors.primary)
+            Text(note)
+                .font(ThemeManager.Typography.caption)
+                .foregroundStyle(ThemeManager.Colors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: 各步内容
@@ -311,7 +353,7 @@ struct GuidedRepairView: View {
             fieldLabel("做什么")
                 .padding(.top, ThemeManager.Spacing.sm)
             editor($draft.repairWhat, placeholder: "把那天的饭补上", minHeight: 60)
-            fieldLabel("如果他说「不用了」，你怎么接")
+            fieldLabel("如果 TA 说「不用了」，你怎么接")
                 .padding(.top, ThemeManager.Spacing.sm)
             editor($draft.ifRefused, placeholder: "那我就先不打扰，过两天再问一次", minHeight: 60)
             issueList(RepairLinter.lintRepairAction(

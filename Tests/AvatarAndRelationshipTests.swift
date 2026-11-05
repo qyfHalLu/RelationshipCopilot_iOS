@@ -179,23 +179,58 @@ final class RelationshipLabelTests: XCTestCase {
 final class GenderNeutralCopyTests: XCTestCase {
 
     /// 这些文件里有大量用户可见文案。
+    ///
+    /// 2026-11-05：原来只有 5 个文件，等于给"别处写了「他」"留了一片盲区。
+    /// 现在把首页、评理流程、快速工具、安全提示都收进来 ——
+    /// 「不默认性别」是产品口径，不是某几个文件的口径。
     private static let filesToScan = [
         "Core/GuidedRepair.swift",
         "Core/DisputePrompt.swift",
         "Core/DisputeVerdict.swift",
+        "Core/SafetyScreen.swift",
+        "Core/WaitingCopy.swift",
         "Presentation/Views/QuickTools/GuidedRepairView.swift",
-        "Presentation/Views/Promises/PromisesView.swift"
+        "Presentation/Views/QuickTools/QuickToolsView.swift",
+        "Presentation/Views/Promises/PromisesView.swift",
+        "Presentation/Views/Dispute/DisputeFlowView.swift",
+        "Presentation/Views/Dispute/RemoteHandoverView.swift",
+        "Presentation/Views/ContentView.swift"
     ]
 
     /// 明确的性别化指代。
     ///
-    /// 刻意不扫单独的「他」：汉语里「其他」「他人」「他」的用法混在一起，
-    /// 单字扫描必然误报（本项目已经因为"关键词存在性"这类断言错过三次）。
-    /// 这里只挑出**确定指代第三方个体**的组合。
-    private static let genderedPhrases = [
-        "她", "陪她", "对她", "让她", "给她", "和她", "跟她",
-        "他先", "让他", "对她好"
+    /// ## 这个清单原来的写法有个洞，2026-11-05 补上
+    ///
+    /// 早先这里只列了**手工挑出的组合**（`她`、`他先`、`让他`、`对她好`…），
+    /// 理由是"单字扫「他」必然误报"（汉语里「其他」「他人」混在一起）。
+    ///
+    /// 后果是：`他有没有把话说完`、`怕他发火`、`错不在他`、`他失去了什么`
+    /// 这些**真实存在于产品文案里**的默认性别指代，一个都没被扫到 ——
+    /// 测试全绿，用户却在界面上看到满屏的「他」。
+    /// 这就是本项目反复交学费的那类错误：断言的覆盖面窄于它声称的范围。
+    ///
+    /// 现在改成：先剔除**确定不含性别含义**的复合词，再扫剩余的 `他` / `她`。
+    private static let genderedPhrases = ["她", "他"]
+
+    /// 这些词里的 `他` 不是性别指代，扫描前先剔除。
+    ///
+    /// 只收真正中性的词，不要为了"让测试通过"往里塞 ——
+    /// 每塞一个词，就少一块覆盖。收词依据是《现代汉语词典》里
+    /// `他` 不指代具体第三方的固定搭配。
+    private static let neutralCompounds = [
+        "其他", "他人", "他乡", "他日", "他方", "他处", "他国", "他者",
+        "他律", "他杀", "他用", "他山之石", "利他", "排他", "无他", "他证",
+        "他年"
     ]
+
+    /// 把一个字面量里"中性的 他"抹掉，剩下的才是需要检查的。
+    static func strippingNeutralCompounds(_ literal: String) -> String {
+        var out = literal
+        for word in Self.neutralCompounds {
+            out = out.replacingOccurrences(of: word, with: "")
+        }
+        return out
+    }
 
     func testUserFacingCopyIsGenderNeutral() throws {
         let root = URL(fileURLWithPath: #filePath)
@@ -205,6 +240,7 @@ final class GenderNeutralCopyTests: XCTestCase {
         var offenders: [String] = []
         var scannedFiles = 0
         var skippedBlocks = 0
+        var scannedLiterals = 0
 
         for relative in Self.filesToScan {
             let url = root.appendingPathComponent(relative)
@@ -216,7 +252,9 @@ final class GenderNeutralCopyTests: XCTestCase {
 
             // 只看字符串字面量，跳过注释。
             for literal in Self.stringLiterals(in: scannable) {
-                for phrase in Self.genderedPhrases where literal.contains(phrase) {
+                scannedLiterals += 1
+                let checked = Self.strippingNeutralCompounds(literal)
+                for phrase in Self.genderedPhrases where checked.contains(phrase) {
                     offenders.append("\(relative): 「\(literal.prefix(40))」含「\(phrase)」")
                 }
             }
@@ -226,6 +264,11 @@ final class GenderNeutralCopyTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(
             scannedFiles, 3,
             "只扫到 \(scannedFiles) 个文件，扫描逻辑可能失效了"
+        )
+        // 同理：一个字面量都没扫到的话，「没有 offender」也是假的。
+        XCTAssertGreaterThanOrEqual(
+            scannedLiterals, 50,
+            "只扫到 \(scannedLiterals) 个字符串字面量，字面量解析可能失效了"
         )
         // 豁免区块必须真的被识别到，否则本测试在悄悄扫全文，
         // 而「豁免」这件事就变成了自欺。
@@ -237,6 +280,25 @@ final class GenderNeutralCopyTests: XCTestCase {
             offenders.isEmpty,
             "产品文案里仍有默认性别的指代（应改为 TA）：\n" + offenders.joined(separator: "\n")
         )
+    }
+
+    /// 反向验证：确认"剔除中性复合词"没有把真正该抓的也一起放过。
+    ///
+    /// 不做这一步的话，`neutralCompounds` 可以被随手加词加到测试永远绿，
+    /// 而这正是本测试第一版的失败方式。
+    func testGenderScannerStillCatchesRealPronouns() {
+        XCTAssertTrue(Self.strippingNeutralCompounds("怕他发火").contains("他"))
+        XCTAssertTrue(Self.strippingNeutralCompounds("错不在他").contains("他"))
+        XCTAssertTrue(Self.strippingNeutralCompounds("他有没有把话说完").contains("他"))
+        XCTAssertTrue(Self.strippingNeutralCompounds("她先开口的").contains("她"))
+
+        // 中性词必须被剔除干净
+        XCTAssertFalse(Self.strippingNeutralCompounds("其他人都走了").contains("他"))
+        XCTAssertFalse(Self.strippingNeutralCompounds("他人的感受").contains("他"))
+        XCTAssertFalse(Self.strippingNeutralCompounds("他乡遇故知").contains("他"))
+
+        // 中性词与真代词混在一起时，不能连坐
+        XCTAssertTrue(Self.strippingNeutralCompounds("其他人怎么想，他说了什么").contains("他"))
     }
 
     /// 剔除显式声明「此处含性别词是刻意的」的区块。

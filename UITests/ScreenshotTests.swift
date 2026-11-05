@@ -430,6 +430,96 @@ final class ScreenshotTests: XCTestCase {
         )
     }
 
+    /// 新建评理必须提供「各自在自己的手机上」这个选项。
+    ///
+    /// ## 这条用例守的是一个"实现好了但用户走不到"的缺陷
+    ///
+    /// `DisputeMode.remote`、邀请链接、加密回传、`RemoteHandoverView`
+    /// 全都实现了，但 `NewDisputeSheet` 当时只列了「同一台手机」和「只有我自己」。
+    /// 于是整条远程链路**只有 UI 测试的启动参数能走到**，真实用户永远看不见 ——
+    /// 而这是本产品区别于单机工具的核心能力。
+    ///
+    /// 用户的原话：「如果是两个人的话，还显示要在同一部手机上输入，
+    /// 但我要求得有发送邀请链接让对方在自己的终端设备上填写的功能」。
+    ///
+    /// 只断言文案存在是不够的（看不见的元素 `exists` 也可能是 true），
+    /// 所以额外要求它 `isHittable` —— 它真的能点到。
+    func test_new_dispute_offers_remote_mode() throws {
+        launch(screen: "disputes")
+        assertRendered("评理列表", expecting: "这里不判谁对谁错")
+
+        app.buttons["开一件新的"].tap()
+
+        let remoteOption = app.buttons
+            .matching(NSPredicate(format: "label CONTAINS %@", "各自在自己的手机上"))
+            .firstMatch
+        XCTAssertTrue(
+            remoteOption.waitForExistence(timeout: 5),
+            "新建评理没有「各自在自己的手机上」这个选项 —— 远程邀请链接无处可达"
+        )
+        XCTAssertTrue(remoteOption.isHittable, "远程模式选项存在但点不到")
+
+        // 选中后隐私说明必须切换成"内容会离开这台手机"那一版。
+        // 选不中/切不过去的话，用户会以为远程模式也不上云。
+        remoteOption.tap()
+        XCTAssertTrue(
+            hasText("唯一会把内容传到本机之外的模式"),
+            "选了远程模式，隐私说明仍是同机模式那一版"
+        )
+        capture("02b-new-dispute-modes")
+    }
+
+    /// 首页「把一件事说清」必须**每一次**都能进去，并且进得去也退得回来。
+    ///
+    /// ## 它守的是「点一下没反应 / 进去了又弹回来」
+    ///
+    /// `DisputeListView` 内部自带 `NavigationStack`（它是 tab 根页，需要那一层），
+    /// 但首页这张卡片是 `NavigationLink` push —— 于是变成**栈套栈**。
+    /// SwiftUI 对这种结构既不报错也不警告，表现是 push 偶发失败或立刻回弹。
+    ///
+    /// 为什么必须循环多次：单次点击很可能正好成功，用例会假绿。
+    /// 「偶发」的缺陷只能用重复来逼近，一条用例点一次是验证不了它的。
+    ///
+    /// 为什么额外断言"退得回来"：栈套栈还会让返回按钮指向错误的地方 ——
+    /// 能进去但出不来，同样是残缺的导航。
+    func test_disputeEntryCardPushAndPopIsStable() throws {
+        launch(screen: "home")
+        assertRendered("首页", expecting: "关系副驾")
+
+        for attempt in 1...3 {
+            let entry = app.buttons
+                .matching(NSPredicate(format: "label CONTAINS %@", "把一件事说清"))
+                .firstMatch
+            XCTAssertTrue(entry.waitForExistence(timeout: 5), "第 \(attempt) 次：首页找不到入口")
+            entry.tap()
+
+            XCTAssertTrue(
+                app.navigationBars["评理"].waitForExistence(timeout: 5),
+                "第 \(attempt) 次点击没有进入评理列表（push 失败或立刻回弹）"
+            )
+            XCTAssertTrue(
+                hasText("这里不判谁对谁错"),
+                "第 \(attempt) 次进入了导航栏但内容不对"
+            )
+
+            // 再等一拍，确认不是"进去后又被弹回首页"。
+            Thread.sleep(forTimeInterval: 1.0)
+            XCTAssertTrue(
+                app.navigationBars["评理"].exists,
+                "第 \(attempt) 次进入后被自动弹回来了"
+            )
+
+            let back = app.navigationBars["评理"].buttons.firstMatch
+            XCTAssertTrue(back.exists, "第 \(attempt) 次：评理页没有返回按钮")
+            back.tap()
+            XCTAssertTrue(
+                hasText("关系副驾"),
+                "第 \(attempt) 次：返回后没有回到首页"
+            )
+        }
+        capture("45-dispute-entry-push-pop")
+    }
+
     // MARK: - 评理流程各状态
 
     func test_case_collecting() throws {
@@ -1564,8 +1654,51 @@ final class ScreenshotTests: XCTestCase {
             hasText("先别急着道歉"),
             "选了「害怕」之后仍然进入道歉流程 —— 这是伦理问题，不是体验问题"
         )
-        XCTAssertTrue(hasText("12338"), "没有给出求助资源")
+
+        // ## 求助资源不能默认性别
+        //
+        // 原来这里只给「全国妇联妇女维权热线 12338」。
+        // 一个全程用「TA」、明确不假定任何一方性别的产品，
+        // 却在唯一的求助入口上假定"需要帮助的那位是女性"；
+        // 而且只给妇女热线，等于告诉另一部分受害者"这里没有你的入口"。
+        XCTAssertTrue(hasText("110"), "没有给出报警电话")
+        XCTAssertTrue(hasText("12356"), "没有给出全国心理援助热线")
+        XCTAssertFalse(
+            hasText("妇联"),
+            "求助资源仍在默认性别（妇联热线只覆盖女性）"
+        )
         capture("43-repair-safety")
+    }
+
+    /// **首次进入**道歉准备时，必须先问安全闸门，不能直接甩出「先别急着道歉」。
+    ///
+    /// ## 这条用例对应的缺陷
+    ///
+    /// `RepairDraftStore` 会把草稿持久化到 UserDefaults，包括
+    /// `fearedReaction`。原实现恢复现场时把这个 `true` 原样带回来，
+    /// 而视图里 `fearedReaction == true` 的优先级高于 `step == .safety`，
+    /// 于是一个上次答过「害怕」的用户，**这次什么都没回答**就直接看到
+    /// 「先别急着道歉」—— 界面在替他下结论。
+    ///
+    /// 用户的原话：「一点进去道歉准备，怎么就提示让先别急着道歉呢？
+    /// 明明什么问题都还没回答」。
+    ///
+    /// 为什么必须单独一条：上面那条 safety 用例走的是 `repairPrefill`，
+    /// 绕过了持久化恢复路径，**永远看不到这个缺陷**。
+    /// 「首屏是什么」和「点完是什么」是两件事。
+    func test_repair_freshEntryAsksGateInsteadOfShowingResources() throws {
+        launch(screen: "home", anchor: "quickTools")
+        openRepairTool()
+
+        XCTAssertTrue(
+            hasText("害怕告诉对方"),
+            "首次进入没有先问安全闸门"
+        )
+        XCTAssertFalse(
+            hasText("先别急着道歉"),
+            "首次进入就直接显示「先别急着道歉」—— 用户什么都还没回答"
+        )
+        capture("44-repair-first-screen")
     }
 
     // MARK: - 登录与内测入口

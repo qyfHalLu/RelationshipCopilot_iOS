@@ -248,10 +248,12 @@ struct AddPromiseView: View {
                         .lineLimit(2...5)
                         .focused($contentFocused)
                         .accessibilityLabel("承诺内容")
-                    // 承诺是「一个具体到能验证的动作」，往往要一两句话才说得清
-                    // （哪天、做什么、做到什么程度）。打字容易越写越糊，
-                    // 最后变成「对 TA 好一点」这种没法打卡的东西。
-                    VoiceInputButton(text: $content, subject: "承诺内容", compact: true)
+                    // 这里曾有语音输入。按产品要求已移除：
+                    // 承诺是一句短话（"这周三把饭补上"），打字的成本低于
+                    // 举起手机说一遍再等识别结果。语音输入保留在真正需要
+                    // 长文本的地方（评理证词、快速工具、道歉准备）。
+                    // 主要理由是「承诺」往往在刚说完话、手正忙的时候写，
+                    // 但短输入的场景里，多一个按钮只是多一层犹豫。
                 } header: {
                     Text("承诺内容")
                 } footer: {

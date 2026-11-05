@@ -71,6 +71,9 @@ git add -A && git commit -m "<做了什么>"
 | 截图 | 必须带 `-resultBundlePath`，再用 `xcrun xcresulttool export attachments` 导出 |
 | **判断 import 能否删** | **不许用 `grep` 静态查，只能"删掉再 `xcodebuild`"。** 实例：`SettingsView` 里的 `import StoreKit` 看着毫无用处（无 `Product`/`purchase`/`Transaction`），实际 `@Environment(\.requestReview)` 的 `RequestReviewAction` 就是 StoreKit 提供的 —— 删掉立刻 `generic parameter 'Value' could not be inferred`。**间接类型引用静态查不到** |
 | **判断函数是否死代码** | 先 `grep -rn` 查全仓库（含子目录），再**删掉编译**双确认。上一轮只因命令漏了子目录，就把还在用的 `SafeLog.maskedPhone` 判成"零调用" |
+| **同一个 View 有 tab 根页 + push 两种入口** | **只能有一个建 `NavigationStack`。** tab 根页必须自建；被 push 时必须不建。两边都建 = 栈套栈，表现为「点一下没反应 / 进去又弹回来 / 没有返回按钮」，而 SwiftUI **不报错也不警告**。开关见 `DisputeListView.ownsNavigationStack` |
+| **验"偶发"的导航缺陷** | 单次点击的用例几乎必然假绿。必须**循环点 N 次 + 每次断言"还在" + 断言"退得回来"**，再把旧实现放回去跑一遍，确认它真的会红 |
+| **文案类断言（性别 / 措辞）** | 别用手工挑的组合去匹配 —— 那只能覆盖你想到的写法。本项目的性别词表只列了 `她`/`他先`/`让他`，于是 `怕他发火`、`错不在他` 全部漏网，测试全绿而界面满是「他」。正确做法是「剔除已知中性词后扫单字」+ 一条反向验证用例 |
 | 断言全绿 | **不代表界面对**。这个项目四次出事都是断言绿、截图坏 |
 | 深色用例 | App 默认就是暗色，测「深色」等于什么都没测，要测**亮色** |
 

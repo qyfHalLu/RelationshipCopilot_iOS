@@ -261,6 +261,10 @@ struct DisputeVerdict: Codable, Equatable, Sendable {
     private static let taAsOtherWord = ["其他", "他人", "他日", "他乡", "他处", "他方", "他年"]
 
     /// 返回命中的性别化指代（空 = 通过）。
+    ///
+    /// gender-neutral-scan:off —— 这段是**检测逻辑本身**，不是文案。
+    /// 它必须写出「他」这个字才能判断"有没有他"，被守门测试扫到属于必然误报。
+    /// 与上面两张词表同理，标记写在这里而不是"人工记住别扫这个文件"。
     var genderedHits: [String] {
         let haystack = [reframe, needA, needB, stuckPoint, action ?? "", coexistence ?? ""]
             .joined(separator: "\n")
@@ -277,6 +281,7 @@ struct DisputeVerdict: Codable, Equatable, Sendable {
         }
         return hits
     }
+    // gender-neutral-scan:on
 
     var passesContentGuards: Bool { forbiddenHits.isEmpty && genderedHits.isEmpty }
 }

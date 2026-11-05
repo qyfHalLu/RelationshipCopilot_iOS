@@ -14,6 +14,24 @@ import SwiftData
 
 struct DisputeListView: View {
 
+    /// 这一屏要不要自己建 `NavigationStack`。
+    ///
+    /// ## 为什么必须区分（一个"点进去又退出来"的真实缺陷）
+    ///
+    /// 这个视图有两个入口：
+    ///   1. 底部 tab 的「评理」—— 它是 tab 根页，**没有人替它建导航容器**，
+    ///      所以必须自己包一层；
+    ///   2. 首页「把一件事说清」卡片 —— 那里是 `NavigationLink` push 进来的，
+    ///      已经在 `HomeView` 的 `NavigationStack` 里了。
+    ///
+    /// 原来两种入口都无条件包 `NavigationStack`，于是第 2 种变成**栈套栈**。
+    /// 症状就是用户报的：点一下有时候没反应、有时候进去了又自己弹回来，
+    /// 得再点一次才进得去。
+    ///
+    /// 这个缺陷很难靠断言抓：`NavigationStack` 嵌套在 SwiftUI 里不报错、
+    /// 不警告，push 失败也只表现为"什么都没发生"。所以判据只能是结构本身。
+    var ownsNavigationStack: Bool = true
+
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \DisputeCase.updatedAt, order: .reverse) private var cases: [DisputeCase]
     @Query(sort: \Profile.updatedAt, order: .reverse) private var profiles: [Profile]
@@ -29,81 +47,86 @@ struct DisputeListView: View {
     @State private var deletionFeedback = 0
 
     var body: some View {
-        // 必须自己包一层 NavigationStack：它是 tab 级页面，没有人替它建导航容器。
-        // 上一版漏了这一层，导致 `.navigationTitle("评理")` 与右上角「+」按钮
-        // **完全不生效** —— 编译通过、无警告、单测全绿，只有真实截图才能看出来。
-        NavigationStack(path: $path) {
-            ZStack {
-                ThemeManager.Colors.background.ignoresSafeArea()
+        if ownsNavigationStack {
+            NavigationStack(path: $path) { content }
+        } else {
+            content
+        }
+    }
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: ThemeManager.Spacing.lg) {
+    private var content: some View {
+        ZStack {
+            ThemeManager.Colors.background.ignoresSafeArea()
 
-                        introCard
+            ScrollView {
+                VStack(alignment: .leading, spacing: ThemeManager.Spacing.lg) {
 
-                        if cases.isEmpty {
-                            emptyState
-                        } else {
-                            caseList
-                        }
+                    introCard
+
+                    if cases.isEmpty {
+                        emptyState
+                    } else {
+                        caseList
                     }
-                    .padding(.horizontal, ThemeManager.Spacing.md)
-                    .padding(.vertical, ThemeManager.Spacing.lg)
-                    // 底部留白：iOS 26 起 tab bar 是浮在内容之上的，
-                    // 滚动到末尾时最后一卡需要能完全浮出它。
-                    .padding(.bottom, ThemeManager.Spacing.xxl)
                 }
-                .refreshable { /* 本地数据，无网络刷新 */ }
+                .padding(.horizontal, ThemeManager.Spacing.md)
+                .padding(.vertical, ThemeManager.Spacing.lg)
+                // 底部留白：iOS 26 起 tab bar 是浮在内容之上的，
+                // 滚动到末尾时最后一卡需要能完全浮出它。
+                .padding(.bottom, ThemeManager.Spacing.xxl)
             }
-            .navigationTitle("评理")
-            .navigationBarTitleDisplayMode(.large)
-            .navigationDestination(for: UUID.self) { id in
-                if let item = cases.first(where: { $0.id == id }) {
-                    DisputeFlowView(disputeCase: item)
-                } else {
-                    Text("这件已经不在了。")
-                        .font(ThemeManager.Typography.body)
-                        .foregroundStyle(ThemeManager.Colors.textSecondary)
+            .refreshable { /* 本地数据，无网络刷新 */ }
+        }
+        .navigationTitle("评理")
+        .navigationBarTitleDisplayMode(.large)
+        .navigationDestination(for: UUID.self) { id in
+            if let item = cases.first(where: { $0.id == id }) {
+                DisputeFlowView(disputeCase: item)
+            } else {
+                Text("这件已经不在了。")
+                    .font(ThemeManager.Typography.body)
+                    .foregroundStyle(ThemeManager.Colors.textSecondary)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showNewCase = true
+                } label: {
+                    Image(systemName: "plus")
                 }
+                .accessibilityLabel("开一件新的")
             }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showNewCase = true
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .accessibilityLabel("开一件新的")
-                }
+        }
+        .sheet(isPresented: $showNewCase) {
+            NewDisputeSheet(profiles: profiles)
+        }
+        // 删单件必须二次确认：案卷里是双方写下的原文，删了不可恢复。
+        // 「删除全部数据」那页都有两道确认，单件删除没有确认是不一致的。
+        .confirmationDialog(
+            "删除这件评理？",
+            isPresented: Binding(
+                get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("删除", role: .destructive) { confirmDelete() }
+            Button("取消", role: .cancel) { pendingDeletion = nil }
+        } message: {
+            Text("双方写的原文会一起删掉，无法恢复。")
+        }
+        .sensoryFeedback(.warning, trigger: deletionFeedback)
+        .task {
+            #if DEBUG
+            // 界面核验：直接推入指定案卷，省去用脚本点进列表。
+            // 只在自建栈时有效 —— 被 push 进来时路径归父栈管，写这里是空操作。
+            if ownsNavigationStack,
+               let id = UITestSupport.initialCaseID,
+               cases.contains(where: { $0.id == id }) {
+                path = [id]
             }
-            .sheet(isPresented: $showNewCase) {
-                NewDisputeSheet(profiles: profiles)
-            }
-            // 删单件必须二次确认：案卷里是双方写下的原文，删了不可恢复。
-            // 「删除全部数据」那页都有两道确认，单件删除没有确认是不一致的。
-            .confirmationDialog(
-                "删除这件评理？",
-                isPresented: Binding(
-                    get: { pendingDeletion != nil },
-                    set: { if !$0 { pendingDeletion = nil } }
-                ),
-                titleVisibility: .visible
-            ) {
-                Button("删除", role: .destructive) { confirmDelete() }
-                Button("取消", role: .cancel) { pendingDeletion = nil }
-            } message: {
-                Text("双方写的原文会一起删掉，无法恢复。")
-            }
-            .sensoryFeedback(.warning, trigger: deletionFeedback)
-            .task {
-                #if DEBUG
-                // 界面核验：直接推入指定案卷，省去用脚本点进列表。
-                if let id = UITestSupport.initialCaseID,
-                   cases.contains(where: { $0.id == id }) {
-                    path = [id]
-                }
-                #endif
-            }
+            #endif
         }
     }
 
@@ -389,6 +412,21 @@ struct NewDisputeSheet: View {
                 title: "两个人一起",
                 detail: "同一台手机上各写一份，互相看不到对方写的内容。写完一起看结果。",
                 icon: "person.2.fill"
+            )
+
+            // ## 远程模式此前在界面上**根本不存在**
+            //
+            // `DisputeMode.remote`、邀请链接、加密回传、`RemoteHandoverView`
+            // 全都实现好了，但新建入口只有「同一台手机」和「只有我自己」两项 ——
+            // 于是第三方填写的链路只有 UI 测试的启动参数能走到，真实用户永远看不见。
+            // 用户的原话是："如果是两个人的话，还显示要在同一部手机上输入"。
+            //
+            // 这一项是它唯一的入口，删掉等于整条远程链路变成死代码。
+            modeCard(
+                mode: .remote,
+                title: "各自在自己的手机上",
+                detail: "你写完会得到一个链接，发给 TA，TA 在自己手机上写。写完两边都能看结果。",
+                icon: "paperplane.fill"
             )
 
             modeCard(

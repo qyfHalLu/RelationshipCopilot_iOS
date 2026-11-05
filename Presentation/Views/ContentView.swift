@@ -425,7 +425,10 @@ struct DisputeEntryCard: View {
 
     var body: some View {
         NavigationLink {
-            DisputeListView()
+            // `ownsNavigationStack: false` —— 我们是 push 进 `HomeView` 的栈里的。
+            // 让列表页再包一层会变成栈套栈，表现为"点了没反应，或者进去又弹回来"。
+            // 详见 `DisputeListView.ownsNavigationStack` 的说明。
+            DisputeListView(ownsNavigationStack: false)
         } label: {
             VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
 
@@ -997,30 +1000,38 @@ struct ActivityRow: View {
     let time: String
 
     var body: some View {
-        // XXXL 下的实测缺陷（截图证实）：
-        // 原来是一条固定 `HStack`：38pt 图标 + 标题 + 单行摘要 + 右侧时间。
-        // 大字号时标题被挤成逐字换行（「冲突 / 复盘」），
-        // 右侧时间被压成两行（「1 小 / 时前」），摘要在单行里被截成「沟通还…」。
-        // 后者最严重：它是这一行唯一的实质内容，截断等于没有任何信息。
+        // ## 这一行必须和「录一段」长得一样
         //
-        // 用 ViewThatFits 让横排放不下时退化为两段式：
-        // 上一行 图标+标题+时间，下一行 完整摘要（可多行）。
+        // 截图实测（`01-home` 系列）：这一行原来右侧放的是时间、**没有 chevron**，
+        // 而紧挨着它上面的「录一段」有一个「›」。同一区块里两张可点的卡片，
+        // 一张有箭头一张没有，读起来像是"下面这张点不动"。
+        //
+        // 同时原来外层是 `HStack(alignment: .top)`，而「录一段」是默认的
+        // 居中 —— 文字块整体高了 2.4pt，两张卡片的基线不在一条线上。
+        // 现在统一成：图标与 chevron 居中，时间退到标题行的右端。
+        //
+        // XXXL 下的旧问题仍然要防：固定横排会把标题挤成逐字换行、
+        // 把时间压成两行、把单行摘要截断。所以保留 `ViewThatFits` 退化分支。
         ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: ThemeManager.Spacing.md) {
+            HStack(alignment: .center, spacing: ThemeManager.Spacing.md) {
                 iconBadge
                 VStack(alignment: .leading, spacing: 2) {
-                    titleText
+                    HStack(alignment: .firstTextBaseline, spacing: ThemeManager.Spacing.sm) {
+                        titleText
+                        Spacer(minLength: 0)
+                        timeText
+                    }
                     subtitleText
                 }
-                Spacer(minLength: 0)
-                timeText
+                chevron
             }
             VStack(alignment: .leading, spacing: ThemeManager.Spacing.sm) {
-                HStack(alignment: .top, spacing: ThemeManager.Spacing.md) {
+                HStack(alignment: .center, spacing: ThemeManager.Spacing.md) {
                     iconBadge
                     titleText
                     Spacer(minLength: 0)
                     timeText
+                    chevron
                 }
                 subtitleText
             }
@@ -1037,6 +1048,14 @@ struct ActivityRow: View {
             .frame(width: 38, height: 38)
             .background(tint)
             .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.sm, style: .continuous))
+            .accessibilityHidden(true)
+    }
+
+    /// 与「录一段」使用同一个箭头，保证同区块内可点卡片的可识别性一致。
+    private var chevron: some View {
+        Image(systemName: "chevron.right")
+            .font(ThemeManager.Typography.caption)
+            .foregroundStyle(ThemeManager.Colors.textSecondary)
             .accessibilityHidden(true)
     }
 

@@ -108,7 +108,7 @@ enum RepairStep: Int, CaseIterable, Identifiable {
         case .explanation:
             return RepairTheory(
                 source: "Lazare,《On Apology》, 2004",
-                claim: "解释只有在认错完整之后才具建设性。他还写过一句更狠的：承认「没有借口」，比提供一个虚假或浅薄的解释更有尊严。",
+                claim: "解释只有在认错完整之后才具建设性。Lazare 还写过一句更狠的：承认「没有借口」，比提供一个虚假或浅薄的解释更有尊严。",
                 caveat: "同上，案例归纳。"
             )
         case .losses:
@@ -205,24 +205,24 @@ enum LossCell: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .dignity:      return "尊严"
-        case .notYourFault: return "错不在他"
+        case .notYourFault: return "错不在 TA"
         case .safety:       return "以后还会不会再来一次"
-        case .beingHeard:   return "他有没有把话说完"
+        case .beingHeard:   return "TA 有没有把话说完"
         case .cost:         return "你有没有付出代价"
         case .reparation:   return "有什么能还回去"
-        case .unsaid:       return "他没说出来的话"
+        case .unsaid:       return "TA 没说出来的话"
         }
     }
 
     var prompt: String {
         switch self {
-        case .dignity:      return "他在谁面前、被当成了什么人？"
-        case .notYourFault: return "他有没有开始怀疑是自己太敏感？"
-        case .safety:       return "他以后会不会担心同样的事再来一次？"
-        case .beingHeard:   return "他说到一半的时候，你在做什么？"
+        case .dignity:      return "TA 在谁面前、被当成了什么人？"
+        case .notYourFault: return "TA 有没有开始怀疑是自己太敏感？"
+        case .safety:       return "TA 以后会不会担心同样的事再来一次？"
+        case .beingHeard:   return "TA 说到一半的时候，你在做什么？"
         case .cost:         return "你为这件事付出过什么？"
         case .reparation:   return "有什么是可以还回去的具体动作？"
-        case .unsaid:       return "他还有什么没说出来？"
+        case .unsaid:       return "TA 还有什么没说出来？"
         }
     }
 
@@ -412,7 +412,7 @@ enum RepairLinter {
             issues.append(RepairIssue(
                 kind: .abstractEmotion,
                 severity: .blocking,
-                message: "「\(hit)」是情绪的词，不是损失。他失去了什么具体的东西？"
+                message: "「\(hit)」是情绪的词，不是损失。TA 失去了什么具体的东西？"
             ))
         }
 
@@ -420,7 +420,7 @@ enum RepairLinter {
             issues.append(RepairIssue(
                 kind: .mindReading,
                 severity: .warning,
-                message: "「\(hit)」是在替他下结论。改成「我猜……」，猜错了才退得回来。"
+                message: "「\(hit)」是在替 TA 下结论。改成「我猜……」，猜错了才退得回来。"
             ))
         }
 
@@ -483,7 +483,7 @@ enum RepairLinter {
             issues.append(RepairIssue(
                 kind: .missingQuestion,
                 severity: .blocking,
-                message: "这还不是一个开放的问题。用「什么 / 怎么 / 哪里」开头，把回答的空间留给他。"
+                message: "这还不是一个开放的问题。用「什么 / 怎么 / 哪里」开头，把回答的空间留给 TA。"
             ))
         }
 
@@ -535,7 +535,7 @@ enum RepairLinter {
             issues.append(RepairIssue(
                 kind: .missingRefusal,
                 severity: .blocking,
-                message: "这一格不能空。如果他拒绝，你打算怎么办？它决定这次道歉是为了他，还是为了你自己好受。"
+                message: "这一格不能空。如果 TA 拒绝，你打算怎么办？它决定这次道歉是为了 TA，还是为了你自己好受。"
             ))
         }
 

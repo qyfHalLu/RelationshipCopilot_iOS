@@ -283,9 +283,9 @@ struct AddProfileView: View {
                 .background(ThemeManager.Colors.surfaceElevated)
                 .clipShape(RoundedRectangle(cornerRadius: ThemeManager.Radius.md, style: .continuous))
                 .accessibilityLabel("备注")
-            // 备注常写"TA 忌讳什么、最近在忙什么、上次为什么吵"这类回忆性内容，
-            // 想的时候比打的时候快。语音入口放在这里而不是省掉。
-            VoiceInputButton(text: $note, subject: "备注", compact: true)
+            // 这里曾有语音输入，已按产品要求移除：备注通常是几个词
+            // （"怕吵""最近加班"），打字的成本远低于说一遍再改错别字。
+            // 语音输入只保留在长文本场景：评理证词、快速工具、道歉准备。
         }
     }
 

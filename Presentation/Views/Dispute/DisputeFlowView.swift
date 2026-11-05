@@ -151,7 +151,7 @@ struct DisputeFlowView: View {
         switch disputeCase.mode {
         case .sameDevice:
             return author == .a
-                ? "写完后这份内容会锁住，交给对方时不会显示在屏幕上。对方写的时候，你也看不到他在写什么。"
+                ? "写完后这份内容会锁住，交给对方时不会显示在屏幕上。对方写的时候，你也看不到 TA 在写什么。"
                 : "这是最后一份。写完就能一起看结果了。"
         case .remote:
             return author == .a
