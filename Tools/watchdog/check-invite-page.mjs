@@ -174,6 +174,98 @@ if (!/看不到/.test(state.bodyText)) {
 }
 if (!state.bodyText.includes("提交我这一份")) fail("提交按钮文案缺失");
 
+// ---- 3b. 配色：两套主题下的对比度必须真的够 ----
+//
+// ## 为什么必须测这一层
+//
+// 上面那些断言全绿的时候，浅色模式下的页面其实是**不能用的**：
+// 卡片和输入框还是深色（`#16161c` / `#0f0f14`），而文字被浅色主题染成了
+// `#1c1c22` —— 题号和用户自己敲的字都压成了"深色叠深色"，肉眼几乎看不见。
+//
+// 根因是 CSS 顺序：`@media (prefers-color-scheme: light)` 覆盖块写在
+// `.card` / `textarea` / `.hint` 的深色规则之前，特异性相同 → 后写的深色赢。
+// 只有 `body` 生效（它后面没有同名规则），所以页面"看起来变了色"，
+// 但变的只有背景 —— 这恰好是最容易骗过一眼扫过的形态。
+//
+// **DOM 断言对此完全无能为力**：元素都在、数量都对、文案都对。
+// 必须读计算样式，而且必须默认把两套主题都跑一遍 ——
+// 只测深色等于没测浅色，而这份链接大多数人是白天在微信里打开的。
+const CONTRAST_PAIRS = [
+  { name: "正文", fg: "body", bg: "body", min: 4.5 },
+  { name: "题号", fg: "label", bg: ".card", min: 4.5 },
+  { name: "提示语", fg: ".hint", bg: ".card", min: 4.5 },
+  { name: "输入框文字", fg: "textarea", bg: "textarea", min: 4.5 },
+  { name: "提交按钮", fg: "#submit", bg: "#submit", min: 4.5 },
+];
+
+// 对比度计算放在页面里做，避免把颜色字符串搬出来自己解析。
+// 关键点：解析失败**不返回 null 静默跳过**，而是抛错 ——
+// 本项目吃过"样本为 0 时断言恒真"的亏，宁可炸也不要假绿。
+const contrastExpr = `
+(function (pairs) {
+  function toRGB(s) {
+    var m = s.match(/rgba?\\(([^)]+)\\)/);
+    if (!m) throw new Error("无法解析颜色：" + s);
+    var p = m[1].split(",").map(function (x) { return parseFloat(x); });
+    return [p[0], p[1], p[2]];
+  }
+  function lum(rgb) {
+    var c = rgb.map(function (v) {
+      v = v / 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  }
+  function ratio(a, b) {
+    var l1 = lum(a), l2 = lum(b);
+    if (l1 < l2) { var t = l1; l1 = l2; l2 = t; }
+    return (l1 + 0.05) / (l2 + 0.05);
+  }
+  var out = [];
+  pairs.forEach(function (p) {
+    var fe = document.querySelector(p.fg), be = document.querySelector(p.bg);
+    if (!fe || !be) throw new Error("找不到元素：" + p.fg + " / " + p.bg);
+    var fg = toRGB(getComputedStyle(fe).color);
+    var bg = toRGB(getComputedStyle(be).backgroundColor);
+    out.push({ name: p.name, ratio: Math.round(ratio(fg, bg) * 100) / 100, min: p.min });
+  });
+  return JSON.stringify(out);
+})(${JSON.stringify(CONTRAST_PAIRS)})
+`;
+
+const contrastResults = {};
+for (const scheme of ["dark", "light"]) {
+  await send("Emulation.setEmulatedMedia", {
+    features: [{ name: "prefers-color-scheme", value: scheme }],
+  });
+  // 换 caseId 强制真重载：只改 fragment / 只改媒体特性都可能不重载
+  await send("Page.navigate", { url: `http://127.0.0.1:${port}/v1/invite/contrast${scheme}case01/page#${keyB64}` });
+  await sleep(2000);
+  const r = await send("Runtime.evaluate", { expression: contrastExpr, returnByValue: true });
+
+  if (r.result.exceptionDetails) {
+    chrome.kill("SIGKILL"); server.close();
+    fail(`${scheme} 主题下读不到颜色：${r.result.exceptionDetails.exception?.description?.split("\n")[0]}`);
+  }
+  // 样本数下限：五组颜色一组都不能少，否则循环里的比较可能一个都没跑
+  const rows = JSON.parse(r.result.result.value);
+  if (rows.length !== CONTRAST_PAIRS.length) {
+    chrome.kill("SIGKILL"); server.close();
+    fail(`${scheme} 主题下只量到 ${rows.length} 组颜色，应为 ${CONTRAST_PAIRS.length} 组`);
+  }
+  contrastResults[scheme] = rows;
+
+  for (const row of rows) {
+    if (row.ratio < row.min) {
+      chrome.kill("SIGKILL"); server.close();
+      fail(`${scheme} 主题下「${row.name}」对比度只有 ${row.ratio}:1，低于 ${row.min}:1 —— 看起来是能读的，实际读不了`);
+    }
+  }
+}
+
+// 还原媒体特性，后面的反向场景按默认深色走
+await send("Emulation.setEmulatedMedia", { features: [] });
+
 // ---- 4. 反向场景：claim 409 ----
 //
 // **必须换一个 pathname，不能只改 fragment。**
@@ -247,4 +339,7 @@ if (noCrypto.textareas > 0) {
 writeFileSync(join(tmpdir(), "invite-page-check.html"), html);
 chrome.kill("SIGKILL");
 server.close();
+const fmt = (rows) => rows.map((r) => `${r.name} ${r.ratio}`).join(" / ");
 console.log(`${qIds.length} 题在浏览器里真实渲染；409 有明确提示；无 WebCrypto 时有中文指引；JS 无异常`);
+console.log(`  对比度 dark：${fmt(contrastResults.dark)}`);
+console.log(`  对比度 light：${fmt(contrastResults.light)}`);

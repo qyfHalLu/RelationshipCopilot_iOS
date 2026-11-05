@@ -229,47 +229,73 @@ function renderInvitePage() {
 <meta name="robots" content="noindex, nofollow">
 <title>有一件事想请你一起说清</title>
 <style>
-  :root { color-scheme: dark light; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 24px 20px 48px;
-    font: 16px/1.7 -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
-    background: #0b0b0f; color: #ececf1;
-    max-width: 640px; margin-inline: auto;
+  /* ## 配色只在这一层定义，别处一律 var() 取用
+     早先的写法是「默认深色规则 + 一个 @media(prefers-color-scheme: light) 覆盖块」。
+     那个写法有个致命问题：@media 块写在 .card / textarea / .hint 的深色规则**之前**，
+     而两者特异性相同（都是单个类），于是后写的深色规则反过来把浅色覆盖掉了。
+     结果只有 body 真正变浅（它后面没有同名规则），
+     卡片和输入框仍是深色、文字却变成深色 —— 题号和输入的字**完全看不见**。
+     这个 bug 靠 DOM 断言永远发现不了，必须测计算样式（见 check-invite-page.mjs）。 */
+  :root {
+    color-scheme: dark;
+    --bg: #0b0b0f; --fg: #ececf1;
+    --muted: #9a9aa6; --hint: #8a8a96;
+    --card-bg: #16161c; --card-bd: #26262f;
+    --field-bg: #0f0f14; --field-bd: #2a2a34;
+    --accent: #6c5ce7; --accent-fg: #fff;
+    --accent-text: #a99bff;
   }
   @media (prefers-color-scheme: light) {
-    body { background: #f7f7fa; color: #1c1c22; }
-    .card { background: #fff; border-color: #e3e3ea; }
-    textarea { background: #fafafc; border-color: #dcdce4; color: #1c1c22; }
-    .hint { color: #6b6b76; }
+    :root {
+      color-scheme: light;
+      --bg: #f7f7fa; --fg: #1c1c22;
+      --muted: #5c5c66; --hint: #6b6b76;
+      --card-bg: #fff; --card-bd: #e3e3ea;
+      --field-bg: #fbfbfd; --field-bd: #dcdce4;
+      --accent: #5b4bd6; --accent-fg: #fff;
+      --accent-text: #5b4bd6;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    /* 底部要给系统手势条留位置。没有 viewport-fit=cover 时 env() 取 0，
+       加了之后才真的躲开 Home Indicator，否则按钮压在手势条下面点不动。 */
+    padding: max(24px, env(safe-area-inset-top)) 20px
+             calc(48px + env(safe-area-inset-bottom));
+    font: 16px/1.7 -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+    -webkit-text-size-adjust: 100%;
+    background: var(--bg); color: var(--fg);
+    max-width: 640px; margin-inline: auto;
   }
   h1 { font-size: 20px; line-height: 1.5; margin: 0 0 8px; }
-  .lede { color: #9a9aa6; font-size: 14px; margin: 0 0 24px; }
+  .lede { color: var(--muted); font-size: 14px; margin: 0 0 24px; }
   .card {
-    background: #16161c; border: 1px solid #26262f; border-radius: 14px;
+    background: var(--card-bg); border: 1px solid var(--card-bd); border-radius: 14px;
     padding: 20px; margin-bottom: 16px;
   }
-  label { display: block; font-weight: 600; margin-bottom: 8px; font-size: 15px; }
-  .hint { color: #8a8a96; font-size: 13px; margin: 0 0 10px; }
+  label { display: block; font-weight: 600; margin-bottom: 8px; font-size: 15px; color: var(--fg); }
+  .hint { color: var(--hint); font-size: 13px; margin: 0 0 10px; }
   textarea {
     width: 100%; min-height: 96px; padding: 12px; font: inherit; font-size: 15px;
-    background: #0f0f14; border: 1px solid #2a2a34; border-radius: 10px;
-    color: inherit; resize: vertical;
+    background: var(--field-bg); border: 1px solid var(--field-bd); border-radius: 10px;
+    color: var(--fg); resize: vertical;
   }
-  textarea:focus { outline: 2px solid #6c5ce7; outline-offset: 1px; }
+  textarea::placeholder { color: var(--hint); }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   button {
     width: 100%; padding: 15px; font: inherit; font-weight: 600;
-    background: #6c5ce7; color: #fff; border: 0; border-radius: 12px;
+    background: var(--accent); color: var(--accent-fg); border: 0; border-radius: 12px;
     margin-top: 8px; cursor: pointer;
   }
   button:disabled { opacity: .5; cursor: default; }
   .quick {
     width: auto; padding: 8px 14px; margin-top: 10px;
     font-size: 14px; font-weight: 500;
-    background: transparent; color: #6c5ce7;
-    border: 1px solid #6c5ce7; border-radius: 999px;
+    background: transparent; color: var(--accent-text);
+    border: 1px solid var(--accent-text); border-radius: 999px;
   }
-  .status { margin-top: 16px; font-size: 14px; color: #9a9aa6; text-align: center; }
+  .status { margin-top: 16px; font-size: 14px; color: var(--muted); text-align: center; }
   .done { text-align: center; padding: 40px 0; }
   .done h2 { font-size: 18px; margin: 0 0 8px; }
 </style>
