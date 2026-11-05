@@ -317,7 +317,10 @@ enum DataRestorer {
         var report = Report()
 
         if policy == .replace {
-            try DataEraser.eraseAll(in: context)
+            // 用 `eraseUserContent` 而不是 `eraseAll`：备份里没有 `User`，
+            // 删掉它等于把账号状态弄成悬空引用（详见该方法注释）。
+            // 恢复数据不应该顺手把用户登出。
+            try DataEraser.eraseUserContent(in: context)
         }
 
         // id → 档案。恢复承诺/记录/案卷时按名字回填关联。

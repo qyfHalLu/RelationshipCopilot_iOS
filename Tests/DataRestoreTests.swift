@@ -213,6 +213,37 @@ final class DataRestoreTests: XCTestCase {
         XCTAssertEqual(remaining.first?.name, "小林")
     }
 
+    /// 覆盖恢复**不能**把登录账号一起删掉。
+    ///
+    /// ## 这条是补上一个漏掉的真实缺陷
+    ///
+    /// 第一版 `restore(.replace)` 直接调了 `DataEraser.eraseAll`，而它会
+    /// `delete(model: User.self)`。后果：
+    ///   1. 备份里没有 `User`（导出的是内容，不是账号），删了补不回来；
+    ///   2. `AuthenticationService.currentUser` 是已落库的对象引用，
+    ///      删行之后变悬空，「我的」页还要读 `currentUser?.phone`。
+    ///
+    /// 为什么之前的往返测试没发现：测试容器里从来没造过 `User` 行，
+    /// 「删掉一个不存在的东西」当然不会报错。**样本缺失使断言恒真** ——
+    /// 这个项目已经因为同一模式错过好几次。
+    func testReplaceKeepAccountRow() throws {
+        let account = User(phone: "13800138000")
+        context.insert(account)
+
+        try seedSampleData()
+        let backup = try DataRestorer.parse(try DataExporter.build(context: context))
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<User>()), 1, "前置条件：账号行必须真的存在")
+
+        _ = try DataRestorer.restore(backup, into: context, policy: .replace)
+
+        XCTAssertEqual(
+            try context.fetchCount(FetchDescriptor<User>()), 1,
+            "覆盖恢复把登录账号删了 —— 备份里没有 User，删了就再也补不回来"
+        )
+        XCTAssertEqual(try context.fetch(FetchDescriptor<User>()).first?.phone, "13800138000")
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Profile>()), 1, "内容应当照常恢复")
+    }
+
     // MARK: - 拒绝坏输入
 
     /// 选错文件（比如导出的使用统计文本）必须明确拒绝，不能"导入 0 条说成功"。

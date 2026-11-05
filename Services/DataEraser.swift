@@ -57,14 +57,35 @@ enum DataEraser {
     /// 比"隐私数据残留"更严重 —— 用户点「永久删除」会闪退。
     @MainActor
     static func eraseAll(in context: ModelContext) throws {
+        try eraseUserContent(in: context)
+        try context.delete(model: User.self)
+        try context.save()
+    }
+
+    /// 清空用户的**内容**，但保留登录账号（`User` 行）。
+    ///
+    /// ## 为什么需要这个单独的入口
+    ///
+    /// 「从备份恢复 → 覆盖」不能把 `User` 一起删掉：
+    ///
+    /// 1. **备份里根本没有 `User`。** 导出的是数据内容，账号属于登录态。
+    ///    删掉之后没有任何东西能把它补回来。
+    /// 2. **`AuthenticationService.currentUser` 是一个已落库的对象引用。**
+    ///    删掉那一行之后它就成了悬空引用，而「我的」页会读
+    ///    `currentUser?.phone` —— 表现是手机号消失，或者更糟：访问已删除对象。
+    /// 3. 恢复数据的语义是「把我的内容搬回来」，不是「退出登录」。
+    ///
+    /// `eraseAll` = 本方法 + 删 `User`，两者共用同一份删除顺序，
+    /// 不会出现"漏删某张表"的分歧。
+    @MainActor
+    static func eraseUserContent(in context: ModelContext) throws {
         // 叶子
         try context.delete(model: FulfillmentRecord.self)
         try context.delete(model: DisputeCase.self)
         try context.delete(model: RecordingSession.self)
         try context.delete(model: Promise.self)
-        // 根
+        // 根（`User` 不在这里 —— 见上面的说明）
         try context.delete(model: Profile.self)
-        try context.delete(model: User.self)
         try context.save()
     }
 
