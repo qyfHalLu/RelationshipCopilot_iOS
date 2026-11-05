@@ -328,6 +328,38 @@ check("单人提示词要求标注猜测", soloPrompt.contains("我猜 TA"))
 // 反向验证：两条提示词必须不同（否则"单机不装中立"就没落实）
 check("两套提示词确实不同", sameDevicePrompt != soloPrompt)
 
+// ---- 等对方写：文案不许替对方下判断 ----
+//
+// 背景：Cloudflare KV 最终一致，最长约 60 秒延迟。
+// "我们没查到" 和 "对方没写" 在数据上无法区分，
+// 所以文案只能说前者。说后者会让用户把技术延迟读成人际信号。
+//
+// 这几条断言的作用不是"验证现在的措辞"，而是**钉住不许改回去**：
+// 以后任何人想把「还没提交」写回来，CI 会拦下。
+let copyWaiting0 = WaitingCopy.counterpartDetail(hasWritten: false, missCount: 0)
+let copyWaiting1 = WaitingCopy.counterpartDetail(hasWritten: false, missCount: 1)
+let copyWaiting2 = WaitingCopy.counterpartDetail(hasWritten: false, missCount: 2)
+let copyDone = WaitingCopy.counterpartDetail(hasWritten: true, missCount: 5)
+
+check("已写完时提示可看结果", copyDone == "可以看结果了")
+
+// 核心禁令：任何一档都不得替对方断言"没提交/没写"
+for (i, c) in [copyWaiting0, copyWaiting1, copyWaiting2].enumerated() {
+    check("未收到（第 \(i) 档）不得出现「还没提交」", !c.contains("还没提交"))
+    check("未收到（第 \(i) 档）不得出现「TA 没写」", !c.contains("没写"))
+    check("未收到（第 \(i) 档）不得出现「未提交」", !c.contains("未提交"))
+}
+// 必须说清"是没收到"，否则用户不知道在等什么
+check("未收到时说明是「还没收到」", copyWaiting0.contains("还没收到"))
+
+// 延迟解释只在查两次以上出现：刚建链接就解释会显得莫名其妙
+check("第一次查不到不解释同步延迟", !copyWaiting0.contains("同步"))
+check("第一次查不到不解释同步延迟（第二次也不）", !copyWaiting1.contains("同步"))
+check("连续查不到才解释同步延迟", copyWaiting2.contains("同步"))
+
+// 三档必须真的不同，否则"分档"是个空壳
+check("三档文案两两不同", copyWaiting0 != copyWaiting1 || copyWaiting1 != copyWaiting2)
+
 print("")
 print("────────────── 汇总 ──────────────")
 print("通过 \(passed) 项，失败 \(failures.count) 项")

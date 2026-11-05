@@ -255,6 +255,7 @@ struct DisputeFlowView: View {
             status: model.inviteStatus,
             isRefreshing: model.isRefreshingInvite,
             errorMessage: model.inviteErrorMessage,
+            pollCount: model.invitePollCount,
             relationshipLabel: disputeCase.profile?.relationship.displayName,
             onRefresh: {
                 Task {

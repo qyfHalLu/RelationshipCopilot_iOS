@@ -65,8 +65,9 @@ git add -A && git commit -m "<做了什么>"
 | 构建 | **必须**加 `OTHER_SWIFT_FLAGS='-disable-sandbox'`，否则宏插件沙箱报错 |
 | `grep` | 本机是 BSD 版，**不支持 `\|` 交替**，一律用 Grep 工具 |
 | Chrome | 无头必须加 `--no-sandbox` |
-| 新增 Core 文件 | 要么登记 `Tools/logic-check/sources.txt`，要么加进 CI 的 `EXCLUDED` 并写明原因 |
+| 新增 Core 文件 | **三件事都要做**：① 登记 `Tools/logic-check/sources.txt`；② **跑 `xcodegen generate` 重新生成工程**；③ 依赖 Services 的进 CI 的 `EXCLUDED` 并写明原因 |
 | 依赖 Services 的 Core 文件 | 不能进 logic-check（会 `cannot find type`），进 `EXCLUDED` |
+| **新文件不进工程** | 这个工程**不是** `fileSystemSynchronized`，是 XcodeGen 从 `project.yml` 生成的。新 `.swift` 文件不跑 `xcodegen generate` 就**不在 target 里**，编译报 `cannot find 'X' in scope`。危险在于 logic-check 走 `sources.txt`、不受影响 → **闸门全绿但 Xcode 编译失败** |
 | 截图 | 必须带 `-resultBundlePath`，再用 `xcrun xcresulttool export attachments` 导出 |
 | 断言全绿 | **不代表界面对**。这个项目四次出事都是断言绿、截图坏 |
 | 深色用例 | App 默认就是暗色，测「深色」等于什么都没测，要测**亮色** |

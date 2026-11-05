@@ -242,10 +242,15 @@ final class DisputeFlowModel {
         do {
             let status = try await inviteService.fetchStatus(caseId: link.caseId)
             inviteStatus = status
-            invitePollCount += 1
 
             guard let ciphertext = status.testimonies["b"] else {
                 // 还没写。注意这**不代表**对方没写过 —— KV 可能还没同步到。
+                //
+                // 只有"查到了、但对方那份还没到"才计数。对方已写完的那次不计数，
+                // 因为那时界面显示的是「可以看结果了」，跟这个计数无关；
+                // 而查询本身失败（网络错误等）也不该计数 —— 那种情况
+                // 我们根本不知道对方写没写，凭它去软化文案等于编造信息。
+                invitePollCount += 1
                 return false
             }
 

@@ -30,3 +30,4 @@ Core/DisputeVerdictParser.swift
 Core/DisputePrompt.swift
 Core/DisputeEvaluation.swift
 Core/GuidedRepair.swift
+Core/WaitingCopy.swift

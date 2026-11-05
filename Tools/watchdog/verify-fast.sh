@@ -42,6 +42,37 @@ while IFS= read -r f; do
 done < Tools/logic-check/sources.txt
 [ -z "$STALE" ] && ok "清单无失效引用" || bad "sources.txt 引用了不存在的文件:$STALE"
 
+# ---- 1b. 每个被 target 收录的 .swift 必须真的在工程里 ----
+#
+# ## 为什么需要这一步
+#
+# 这个工程**不是** `fileSystemSynchronized`，是 XcodeGen 从 `project.yml` 生成的。
+# 新建一个 `.swift` 文件后如果没跑 `xcodegen generate`，它**不在 target 里**，
+# Xcode 编译时报 `cannot find 'X' in scope`。
+#
+# 危险之处在于：logic-check 走 `sources.txt`、**完全不受影响** ——
+# 于是会出现「六步闸门全绿、但 App 编译失败」这种最坏的组合。
+# 本轮就真的踩到了：新增 `Core/WaitingCopy.swift`，闸门绿，xcodebuild 红。
+#
+# 判据：把 sources.txt 里每个文件名拿去 project.pbxproj 里找。
+# 找不到就说明工程没收录 —— 修法是跑 `xcodegen generate`，不是改这里。
+PBX="$PWD/RelationshipCopilot.xcodeproj/project.pbxproj"
+if [ -f "$PBX" ]; then
+  MISSING=""
+  while IFS= read -r f; do
+    case "$f" in ''|'#'*) continue;; esac
+    base=$(basename "$f")
+    if ! grep -qF "$base" "$PBX"; then MISSING="$MISSING $f"; fi
+  done < Tools/logic-check/sources.txt
+  if [ -z "$MISSING" ]; then
+    ok "清单内文件都已在 Xcode 工程中"
+  else
+    bad "以下文件没有进入 Xcode 工程（跑 xcodegen generate）:$MISSING"
+  fi
+else
+  bad "找不到 project.pbxproj，无法校验文件是否进工程"
+fi
+
 echo "▶ 2/6 logic-check 冒烟真能编译并跑通"
 # 只校验清单不校验能不能编，等于让 CI 从"清单不全"变成"编译失败"。
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"

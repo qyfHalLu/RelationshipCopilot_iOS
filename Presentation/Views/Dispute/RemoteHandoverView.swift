@@ -30,6 +30,8 @@ struct RemoteHandoverView: View {
     let status: InviteStatus?
     let isRefreshing: Bool
     let errorMessage: String?
+    /// 已经查过几次。用来把"TA 还没提交"这句软化掉 —— 见 `progressCard` 里的说明。
+    let pollCount: Int
     let relationshipLabel: String?
     let onRefresh: () -> Void
     let onCopy: () -> Void
@@ -258,6 +260,17 @@ struct RemoteHandoverView: View {
 
     // MARK: 进度
 
+    /// 「TA 写完了」这一行的说明文字。
+    ///
+    /// 具体措辞与"为什么不能说『还没提交』"都在 `Core/WaitingCopy.swift` 里，
+    /// 那里是能自动化验证的；这里只负责把状态传进去。
+    private var counterpartWrittenDetail: String {
+        WaitingCopy.counterpartDetail(
+            hasWritten: status?.counterpartHasWritten == true,
+            missCount: pollCount
+        )
+    }
+
     private var progressCard: some View {
         VStack(alignment: .leading, spacing: ThemeManager.Spacing.md) {
             Text("现在到哪一步了")
@@ -275,7 +288,7 @@ struct RemoteHandoverView: View {
                 done: status?.counterpartHasWritten == true,
                 inProgress: status?.counterpartOpenedLink == true && status?.counterpartHasWritten != true,
                 title: "TA 写完了",
-                detail: status?.counterpartHasWritten == true ? "可以看结果了" : "还没提交"
+                detail: counterpartWrittenDetail
             )
 
             Button(action: onRefresh) {
