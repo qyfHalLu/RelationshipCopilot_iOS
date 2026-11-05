@@ -286,7 +286,29 @@ function renderInvitePage() {
   "use strict";
 
   // caseId 来自路径；key 来自 # 之后 —— 后者永远不会出现在 HTTP 请求里。
-  var m = location.pathname.match(/\\/v1\\/invite\\/([A-Za-z0-9_-]{16,64})\\/page/);
+  //
+  // ## 下面这条正则的反斜杠，一个都不能多
+  //
+  // 这段 JS 整个写在模板字符串里。模板字符串会把 \\ 求值成一个 \
+  // 所以这里写 \\/ 的话，浏览器收到的是「两个反斜杠 + 斜杠」——
+  // 而「两个反斜杠」在正则里表示"匹配一个反斜杠"，
+  // 它后面那个斜杠就提前把正则字面量闭合了，紧跟的 v1 被当成修饰符：
+  //   SyntaxError: Invalid regular expression flags
+  //
+  // 后果不是这一句报错，而是**整段脚本一行都不执行**：
+  // 页面只剩标题和一行说明，四个问题一个都不渲染，
+  // 对方打开链接看到的就是一片空白。
+  //
+  // 更值得记住的是这件事**不可能靠读源码的测试发现** ——
+  // 转义只在"模板字符串求值 + 浏览器解析"这两步之后才现形。
+  // 所以必须有一条真的把页面放进浏览器执行的检查
+  // （Tools/watchdog/check-invite-page.mjs），
+  // 它会直接报出上面那句 SyntaxError。
+  //
+  // 另外：模板字符串里绝对不能出现反引号，注释里也不行 ——
+  // 那一轮我就是用反引号把这几个反斜杠括起来，结果把整个字符串切断了，
+  // 报的是 SyntaxError: Invalid or unexpected token。
+  var m = location.pathname.match(/\/v1\/invite\/([A-Za-z0-9_-]{16,64})\/page/);
   var caseId = m && m[1];
   var keyB64 = location.hash.replace(/^#/, "");
 
