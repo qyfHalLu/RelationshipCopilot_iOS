@@ -147,6 +147,12 @@ struct DataManagementView: View {
     @State private var showFinalConfirm = false
     @State private var statusMessage: String?
 
+    // 恢复相关
+    @State private var showImporter = false
+    @State private var pendingBackup: DataRestorer.Backup?
+    @State private var pendingPreview: DataRestorer.Preview?
+    @State private var showRestorePreview = false
+
     var body: some View {
         List {
             Section {
@@ -171,6 +177,23 @@ struct DataManagementView: View {
                 Text("导出")
             } footer: {
                 Text("导出内容包含人物档案、承诺、记录、转写文本，以及评理案卷（含你写下的原文）。文件是**未加密的明文 JSON**，只保存在本机临时目录，分享后请自行保管。")
+            }
+
+            // ## 恢复：导出一直存在，但很久没有"导入"
+            //
+            // 没有这一块时，「建议先导出备份」这句话是空的 ——
+            // 导出的文件没有任何路径能读回 App。换手机、误删、重装之后，
+            // 用户手里那份 JSON 只能看，不能恢复。
+            Section {
+                Button {
+                    showImporter = true
+                } label: {
+                    Label("从备份文件恢复", systemImage: "square.and.arrow.down")
+                }
+            } header: {
+                Text("恢复")
+            } footer: {
+                Text("选择之前导出的 JSON 备份。会先告诉你能恢复多少条，再由你决定是合并还是覆盖。")
             }
 
             if let statusMessage {
@@ -212,6 +235,86 @@ struct DataManagementView: View {
             Button("永久删除", role: .destructive) { deleteEverything() }
         } message: {
             Text("将立即清空所有本地数据并退出登录。")
+        }
+        // 选文件 → 解析 → 预览 → 用户选策略。
+        // 刻意**不在选完文件后直接写入**：恢复是有破坏性的（覆盖模式会清空），
+        // 而 `fileImporter` 的回调里做重活也容易让用户以为"点一下就完事了"。
+        .fileImporter(
+            isPresented: $showImporter,
+            allowedContentTypes: [.json],
+            allowsMultipleSelection: false
+        ) { result in
+            handlePickedFile(result)
+        }
+        .sheet(isPresented: $showRestorePreview) {
+            if let backup = pendingBackup, let preview = pendingPreview {
+                RestorePreviewSheet(preview: preview) { policy in
+                    showRestorePreview = false
+                    performRestore(backup, policy: policy)
+                } onCancel: {
+                    showRestorePreview = false
+                    pendingBackup = nil
+                    pendingPreview = nil
+                }
+            }
+        }
+    }
+
+    // MARK: 恢复
+
+    private func handlePickedFile(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            statusMessage = "没有读取文件：\(error.localizedDescription)"
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            // 沙盒外的文件必须显式申请访问权限，否则读到的是空 Data —— 而且不报错。
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+            do {
+                let data = try Data(contentsOf: url)
+                let backup = try DataRestorer.parse(data)
+                let preview = DataRestorer.preview(backup, in: modelContext)
+                pendingBackup = backup
+                pendingPreview = preview
+                showRestorePreview = true
+            } catch let failure as DataRestorer.Failure {
+                statusMessage = failure.errorDescription
+            } catch {
+                statusMessage = "读取失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func performRestore(_ backup: DataRestorer.Backup, policy: DataRestorer.Policy) {
+        do {
+            let report = try DataRestorer.restore(backup, into: modelContext, policy: policy)
+            var parts: [String] = []
+            if report.insertedProfiles > 0 { parts.append("\(report.insertedProfiles) 个人物") }
+            if report.insertedPromises > 0 { parts.append("\(report.insertedPromises) 条承诺") }
+            if report.insertedRecords > 0 { parts.append("\(report.insertedRecords) 条打卡") }
+            if report.insertedSessions > 0 { parts.append("\(report.insertedSessions) 条记录") }
+            if report.insertedDisputes > 0 { parts.append("\(report.insertedDisputes) 件评理") }
+
+            var message = parts.isEmpty
+                ? "没有新内容可恢复（这些数据本来就在本机）。"
+                : "已恢复：" + parts.joined(separator: "、") + "。"
+            if report.skippedExisting > 0 {
+                message += "跳过 \(report.skippedExisting) 条已存在的。"
+            }
+            // 警告必须出现在结果里，而不是只写在代码注释里。
+            for warning in Set(report.warnings) {
+                message += "\n\(warning)"
+            }
+            statusMessage = message
+
+            DataMaintenance.syncWidget(context: modelContext)
+            pendingBackup = nil
+            pendingPreview = nil
+        } catch {
+            AppLog.persistence.error("Restore failed: \(error.localizedDescription, privacy: .public)")
+            statusMessage = "恢复失败：\(error.localizedDescription)"
         }
     }
 
@@ -269,6 +372,98 @@ struct DataManagementView: View {
     }
 }
 
+// MARK: - 恢复前确认
+
+/// 恢复前把"会发生什么"摊开给用户看。
+///
+/// 为什么不用 `.alert`：这里要做的是**二选一的有破坏性决定**，
+/// 在一行按钮里塞两个语义相反的动作（合并 / 清空）太容易误触。
+/// 而且 `.alert` 放不下"本机已有 N 条会跳过"这类必要信息。
+private struct RestorePreviewSheet: View {
+
+    let preview: DataRestorer.Preview
+    let onConfirm: (DataRestorer.Policy) -> Void
+    let onCancel: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    row("人物档案", preview.newProfiles)
+                    row("承诺", preview.newPromises)
+                    row("对话记录", preview.newSessions)
+                    row("评理案卷", preview.newDisputes)
+                } header: {
+                    Text("这份备份能补进来")
+                } footer: {
+                    if let exportedAt = preview.exportedAt {
+                        Text("备份时间：\(exportedAt.formatted(date: .abbreviated, time: .shortened))")
+                    }
+                }
+
+                if preview.duplicateItems > 0 {
+                    Section {
+                        Text("另有 \(preview.duplicateItems) 条本机已经有了，会自动跳过。")
+                            .font(ThemeManager.Typography.caption)
+                            .foregroundStyle(ThemeManager.Colors.textSecondary)
+                    }
+                }
+
+                if preview.isEmpty {
+                    Section {
+                        Text("这份备份里的内容本机都有了，恢复不会改变任何东西。")
+                            .font(ThemeManager.Typography.caption)
+                            .foregroundStyle(ThemeManager.Colors.textSecondary)
+                    }
+                }
+
+                Section {
+                    Button {
+                        onConfirm(.merge)
+                    } label: {
+                        Label("合并到现有数据", systemImage: "plus.circle")
+                    }
+                    .disabled(preview.isEmpty)
+
+                    Button(role: .destructive) {
+                        onConfirm(.replace)
+                    } label: {
+                        Label("先清空，再全部恢复", systemImage: "arrow.counterclockwise")
+                    }
+                } header: {
+                    Text("怎么恢复")
+                } footer: {
+                    // 覆盖这一条必须说清它删什么，否则用户会以为只是"导入"。
+                    Text("「合并」只补充本机没有的内容，不动现有数据。\n「先清空」会**永久删除本机现有全部数据**，再写入这份备份 —— 适合换新手机时用，误选无法撤销。")
+                }
+            }
+            .navigationTitle("恢复备份")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") {
+                        onCancel()
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    private func row(_ title: String, _ count: Int) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(count > 0 ? "\(count)" : "—")
+                .foregroundStyle(count > 0
+                    ? ThemeManager.Colors.textPrimary
+                    : ThemeManager.Colors.textSecondary)
+        }
+    }
+}
+
 // MARK: - 导出器
 
 enum DataExporter {
@@ -299,6 +494,11 @@ enum DataExporter {
             let content: String
             let status: String
             let deadline: Date?
+            /// 承诺的双方。原来没导出，恢复时只能退回占位值 ——
+            /// 而 `politeAddress` / 首页待办都靠这个字段决定称呼。
+            let promisor: String
+            let promisee: String
+            let committedAt: Date
             let fulfillmentRate: Double
             let streakDays: Int
             let lastCheckIn: Date?
@@ -371,6 +571,12 @@ enum DataExporter {
             let verdict: VerdictDTO?
         }
 
+        /// 备份格式版本。恢复端据此拒绝"更新的版本导出的文件"——
+        /// 读懂一半就写入，比拒绝导入更糟。
+        ///
+        /// 早期导出的文件没有这个字段，恢复端按 1 处理。
+        let schemaVersion: Int
+
         let exportedAt: Date
         let appVersion: String
         let profiles: [ProfileDTO]
@@ -388,6 +594,7 @@ enum DataExporter {
         let disputes = try context.fetch(FetchDescriptor<DisputeCase>(sortBy: [SortDescriptor(\.createdAt)]))
 
         let payload = Payload(
+            schemaVersion: DataRestorer.supportedSchemaVersion,
             exportedAt: Date(),
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0",
             profiles: profiles.map {
@@ -410,6 +617,9 @@ enum DataExporter {
                     content: promise.content,
                     status: promise.trackingStatus,
                     deadline: promise.deadline,
+                    promisor: promise.promisor,
+                    promisee: promise.promisee,
+                    committedAt: promise.committedAt,
                     fulfillmentRate: promise.fulfillmentRate,
                     streakDays: promise.streakDays,
                     lastCheckIn: promise.lastCheckIn,

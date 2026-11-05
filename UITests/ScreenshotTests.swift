@@ -520,6 +520,46 @@ final class ScreenshotTests: XCTestCase {
         capture("45-dispute-entry-push-pop")
     }
 
+    /// 数据管理页必须同时提供「导出」和「从备份恢复」。
+    ///
+    /// ## 这条守的是"备份只进不出"的半残功能
+    ///
+    /// 早先只有导出，`fileImporter` 全仓库零命中。于是「建议先导出备份」
+    /// 这句话是空的 —— 导出的文件没有任何路径能读回来，换手机或误删之后
+    /// 用户手里那份 JSON 只能看。
+    ///
+    /// 只断言按钮存在不够：这一页有 3 个分组，按钮可能被挤到屏幕外。
+    /// 所以额外要求它 `isHittable`。
+    func test_dataManagementOffersRestore() throws {
+        launch(screen: "me")
+        assertRendered("我的", expecting: "我的")
+
+        app.buttons["数据管理"].firstMatch.tap()
+
+        XCTAssertTrue(
+            hasText("导出全部数据"),
+            "数据管理页没有导出入口"
+        )
+        let restore = app.buttons
+            .matching(NSPredicate(format: "label CONTAINS %@", "从备份文件恢复"))
+            .firstMatch
+        XCTAssertTrue(restore.waitForExistence(timeout: 5), "没有恢复入口 —— 备份只能看不能用")
+        XCTAssertTrue(restore.isHittable, "恢复按钮存在但点不到")
+        capture("46-data-management")
+
+        restore.tap()
+        // 系统的文件选择器是**独立进程**，而且跟随系统语言。
+        // 第一次写这条时只查中文「浏览」，在英文模拟器上直接失败 ——
+        // 而截图证明选择器其实弹出来了。所以这里两种语言一起认，
+        // 判据只保留"它真的被拉起来了"这一件事。
+        let pickerOpened = ["Recents", "最近项目", "Browse", "浏览"].contains { label in
+            app.navigationBars[label].waitForExistence(timeout: 2)
+                || app.staticTexts[label].exists
+        }
+        XCTAssertTrue(pickerOpened, "点了恢复但没有弹出文件选择器")
+        capture("47-file-picker")
+    }
+
     // MARK: - 评理流程各状态
 
     func test_case_collecting() throws {
