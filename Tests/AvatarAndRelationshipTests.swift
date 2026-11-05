@@ -181,36 +181,45 @@ final class GenderNeutralCopyTests: XCTestCase {
     /// 这些文件里有大量用户可见文案。
     ///
     /// 2026-11-05：原来只有 5 个文件，等于给"别处写了「他」"留了一片盲区。
-    /// 现在把首页、评理流程、快速工具、安全提示都收进来 ——
-    /// 「不默认性别」是产品口径，不是某几个文件的口径。
+    /// 后来发现真正的重灾区根本不在那 5 个里 —— `AIAssistService` 的提示词
+    /// 用「他可能会觉得……」给模型做示例，模型会照抄。
+    /// 所以现在覆盖全部会产出用户可见文本的文件（视图 + 提示词 + 文案常量）。
     private static let filesToScan = [
+        // Core：文案与提示词
         "Core/GuidedRepair.swift",
         "Core/DisputePrompt.swift",
         "Core/DisputeVerdict.swift",
         "Core/SafetyScreen.swift",
         "Core/WaitingCopy.swift",
-        "Presentation/Views/QuickTools/GuidedRepairView.swift",
+        // Services：提示词与错误文案
+        "Services/AIAssistService.swift",
+        "Services/AIService.swift",
+        "Services/InviteService.swift",
+        "Services/AuthenticationService.swift",
+        // 首页与工具
+        "Presentation/Views/ContentView.swift",
         "Presentation/Views/QuickTools/QuickToolsView.swift",
-        "Presentation/Views/Promises/PromisesView.swift",
+        "Presentation/Views/QuickTools/GuidedRepairView.swift",
+        // 评理
+        "Presentation/Views/Dispute/DisputeListView.swift",
         "Presentation/Views/Dispute/DisputeFlowView.swift",
+        "Presentation/Views/Dispute/DisputeVerdictView.swift",
         "Presentation/Views/Dispute/RemoteHandoverView.swift",
-        "Presentation/Views/ContentView.swift"
+        "Presentation/Views/Dispute/TestimonyEditor.swift",
+        // 其他页面
+        "Presentation/Views/Promises/PromisesView.swift",
+        "Presentation/Views/Profiles/ProfilesView.swift",
+        "Presentation/Views/Profiles/ProfileDetailView.swift",
+        "Presentation/Views/Profiles/AddProfileView.swift",
+        "Presentation/Views/Settings/MeView.swift",
+        "Presentation/Views/Settings/SettingsView.swift",
+        "Presentation/Views/Settings/LegalViews.swift",
+        "Presentation/Views/Auth/AuthenticationView.swift",
+        "Presentation/Views/Recording/RecordingView.swift",
+        "Presentation/Views/Analysis/AnalysisView.swift",
+        "Presentation/Views/Analysis/SessionDetailView.swift"
     ]
 
-    /// 明确的性别化指代。
-    ///
-    /// ## 这个清单原来的写法有个洞，2026-11-05 补上
-    ///
-    /// 早先这里只列了**手工挑出的组合**（`她`、`他先`、`让他`、`对她好`…），
-    /// 理由是"单字扫「他」必然误报"（汉语里「其他」「他人」混在一起）。
-    ///
-    /// 后果是：`他有没有把话说完`、`怕他发火`、`错不在他`、`他失去了什么`
-    /// 这些**真实存在于产品文案里**的默认性别指代，一个都没被扫到 ——
-    /// 测试全绿，用户却在界面上看到满屏的「他」。
-    /// 这就是本项目反复交学费的那类错误：断言的覆盖面窄于它声称的范围。
-    ///
-    /// 现在改成：先剔除**确定不含性别含义**的复合词，再扫剩余的 `他` / `她`。
-    private static let genderedPhrases = ["她", "他"]
 
     /// 这些词里的 `他` 不是性别指代，扫描前先剔除。
     ///
@@ -240,23 +249,18 @@ final class GenderNeutralCopyTests: XCTestCase {
         var offenders: [String] = []
         var scannedFiles = 0
         var skippedBlocks = 0
-        var scannedLiterals = 0
+        var scannedLines = 0
 
         for relative in Self.filesToScan {
             let url = root.appendingPathComponent(relative)
             guard let source = try? String(contentsOf: url, encoding: .utf8) else { continue }
             scannedFiles += 1
 
-            let (scannable, blocks) = Self.strippingExemptBlocks(source)
-            skippedBlocks += blocks
-
-            // 只看字符串字面量，跳过注释。
-            for literal in Self.stringLiterals(in: scannable) {
-                scannedLiterals += 1
-                let checked = Self.strippingNeutralCompounds(literal)
-                for phrase in Self.genderedPhrases where checked.contains(phrase) {
-                    offenders.append("\(relative): 「\(literal.prefix(40))」含「\(phrase)」")
-                }
+            let result = Self.scan(source)
+            skippedBlocks += result.skippedBlocks
+            scannedLines += result.scannedLines
+            for hit in result.hits {
+                offenders.append("\(relative):\(hit.line) \(hit.text)")
             }
         }
 
@@ -265,13 +269,12 @@ final class GenderNeutralCopyTests: XCTestCase {
             scannedFiles, 3,
             "只扫到 \(scannedFiles) 个文件，扫描逻辑可能失效了"
         )
-        // 同理：一个字面量都没扫到的话，「没有 offender」也是假的。
+        // 同理：一行都没扫到的话，「没有 offender」也是假的。
         XCTAssertGreaterThanOrEqual(
-            scannedLiterals, 50,
-            "只扫到 \(scannedLiterals) 个字符串字面量，字面量解析可能失效了"
+            scannedLines, 500,
+            "只扫到 \(scannedLines) 行，扫描逻辑可能失效了"
         )
-        // 豁免区块必须真的被识别到，否则本测试在悄悄扫全文，
-        // 而「豁免」这件事就变成了自欺。
+        // 豁免区块必须真的被识别到，否则「豁免」这件事就变成了自欺。
         XCTAssertGreaterThanOrEqual(
             skippedBlocks, 2,
             "只识别到 \(skippedBlocks) 个豁免区块，标记解析可能失效了"
@@ -280,6 +283,89 @@ final class GenderNeutralCopyTests: XCTestCase {
             offenders.isEmpty,
             "产品文案里仍有默认性别的指代（应改为 TA）：\n" + offenders.joined(separator: "\n")
         )
+    }
+
+    /// 扫描结果。
+    struct ScanResult {
+        var hits: [(line: Int, text: String)] = []
+        var skippedBlocks = 0
+        var scannedLines = 0
+    }
+
+    /// 逐行扫描一份源码：跳过豁免块、去掉 `//` 之后的注释，再看剩下部分有没有性别指代。
+    ///
+    /// ## 为什么不再只扫「单行字符串字面量」
+    ///
+    /// 第一版用 `"` 配对切字面量，对**多行字符串**（`"""`）是失效的：
+    /// 提示词正文里只要出现一个引号（例如给模型的示例 `用"他可能会觉得……"`），
+    /// 配对就错位，**恰好被引号夹住的那句话会被当成"不在字面量里"而跳过**。
+    ///
+    /// 实测证据：把 `他可能会觉得` 放回 `AIAssistService` 的提示词里，
+    /// 旧扫描器 0 命中、测试照样全绿。而提示词里的一句话会被模型照抄进输出 ——
+    /// 那是最该拦的地方。
+    ///
+    /// 现在改为按行扫描全文：注释是解释，不是产品文案，去掉；
+    /// 代码里的中文极少，误报风险远小于漏报。
+    static func scan(_ source: String) -> ScanResult {
+        var result = ScanResult()
+        var exempt = false
+
+        for (index, raw) in source.components(separatedBy: "\n").enumerated() {
+            if raw.contains("gender-neutral-scan:off") {
+                exempt = true
+                result.skippedBlocks += 1
+                continue
+            }
+            if raw.contains("gender-neutral-scan:on") {
+                exempt = false
+                continue
+            }
+            if exempt { continue }
+
+            // 行尾注释不算文案
+            let code = raw.components(separatedBy: "//").first ?? ""
+            if code.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+            result.scannedLines += 1
+
+            let checked = strippingNeutralCompounds(code)
+            if checked.contains("他") || checked.contains("她") {
+                result.hits.append((index + 1, String(code.prefix(60))))
+            }
+        }
+        return result
+    }
+
+    /// 反向验证：扫描器必须能看见**多行字符串**里的性别指代。
+    ///
+    /// 这条是给上面那段注释兜底的 —— 没有它，谁都可以把扫描逻辑
+    /// "简化"回只认单行字面量，而测试依然全绿。
+    func testScannerSeesMultiLinePromptText() {
+        let sample = """
+        enum P {
+            static let prompt = \"\"\"
+            任务：不要说「他可能会觉得……」。
+            \"\"\"
+        }
+        """
+        let result = Self.scan(sample)
+        XCTAssertEqual(result.hits.count, 1, "多行提示词里的「他」没有被扫到：\(result.hits)")
+        XCTAssertEqual(result.hits.first?.line, 3, "行号不对，报错时无法定位")
+
+        // 注释里的「他」不该被算成文案
+        let commented = """
+        // 这里解释历史时提到他，不算产品文案
+        let x = 1
+        """
+        XCTAssertTrue(Self.scan(commented).hits.isEmpty, "把注释里的「他」当成了产品文案")
+
+        // 豁免块仍然要生效
+        let exempted = """
+        // gender-neutral-scan:off
+        let needles = ["他先", "她先"]
+        // gender-neutral-scan:on
+        """
+        XCTAssertTrue(Self.scan(exempted).hits.isEmpty, "豁免块没有生效")
+        XCTAssertEqual(Self.scan(exempted).skippedBlocks, 1)
     }
 
     /// 反向验证：确认"剔除中性复合词"没有把真正该抓的也一起放过。
@@ -301,55 +387,7 @@ final class GenderNeutralCopyTests: XCTestCase {
         XCTAssertTrue(Self.strippingNeutralCompounds("其他人怎么想，他说了什么").contains("他"))
     }
 
-    /// 剔除显式声明「此处含性别词是刻意的」的区块。
-    ///
-    /// 背景：本测试第一次跑就报了 8 条，其中 7 条来自**输入侧检测词表**
-    /// （`blameMarkers` 收用户手写时会打的「她先」，`forbiddenPhrases` 拦模型输出的「她错了」）。
-    /// 那两处**必须**保留性别词，否则功能漏检。
-    ///
-    /// 所以不能靠「人工记住哪些文件别扫」——那种豁免会随时间失效且无人察觉。
-    /// 改成让源码自己声明：`gender-neutral-scan:off` 到 `:on` 之间跳过。
-    /// 标记写在注释里，因此不会进入字符串字面量。
-    // 从 private 放开到 internal：为了让下面的反向验证能直接调它。
-    // 「新增断言要做反向验证」是本项目已付过代价的规矩 ——
-    // 不故意让条件失败一次，就排除不掉「恒真」。
-    static func strippingExemptBlocks(_ source: String) -> (String, Int) {
-        var output = ""
-        var exempt = false
-        var blocks = 0
-        for line in source.components(separatedBy: "\n") {
-            if line.contains("gender-neutral-scan:off") {
-                exempt = true
-                blocks += 1
-                continue
-            }
-            if line.contains("gender-neutral-scan:on") {
-                exempt = false
-                continue
-            }
-            if !exempt { output += line + "\n" }
-        }
-        return (output, blocks)
-    }
 
-    /// 取出源码里的 `"..."` 字面量。
-    static func stringLiterals(in source: String) -> [String] {
-        var literals: [String] = []
-        var current: String?
-        for ch in source {
-            if ch == "\"" {
-                if let open = current {
-                    literals.append(open)
-                    current = nil
-                } else {
-                    current = ""
-                }
-                continue
-            }
-            if current != nil { current?.append(ch) }
-        }
-        return literals
-    }
 }
 
 // MARK: - 输出侧性别兜底
@@ -440,6 +478,11 @@ final class VerdictGenderGuardTests: XCTestCase {
 /// 上面那个守门测试如果本身失效，报绿是没意义的。
 ///
 /// 这几条专门喂**故意的坏输入**，确认扫描器能抓到、也能正确地只放过标记区块。
+///
+/// 2026-11-05：这三条原先测的是 `strippingExemptBlocks` + `stringLiterals`
+/// 那套"先切字面量再扫"的旧管线 —— 而主测试已经改成按行扫描。
+/// 结果是它们在保护一段**没人用的代码**，主流程坏了也不会红。
+/// 现在统一改测 `scan(_:)`。
 final class GenderNeutralScannerTests: XCTestCase {
 
     private typealias Scanner = GenderNeutralCopyTests
@@ -450,16 +493,9 @@ final class GenderNeutralScannerTests: XCTestCase {
         let a = "你让他很为难"
         let b = "把功劳给她"
         """
-        let (scannable, blocks) = Scanner.strippingExemptBlocks(source)
-        XCTAssertEqual(blocks, 0, "这段没有标记，不该识别出豁免区块")
-
-        let literals = Scanner.stringLiterals(in: scannable)
-        XCTAssertGreaterThanOrEqual(literals.count, 2, "字面量都没解析出来，后面的断言会恒真")
-
-        let hits = literals.flatMap { lit in
-            ["让她", "给她", "和他", "让他"].filter { lit.contains($0) }
-        }
-        XCTAssertEqual(hits.count, 2, "故意写的两处性别词应当各命中一次，实际命中 \(hits)")
+        let result = Scanner.scan(source)
+        XCTAssertEqual(result.skippedBlocks, 0, "这段没有标记，不该识别出豁免区块")
+        XCTAssertEqual(result.hits.count, 2, "故意的两处性别词应当各命中一次，实际 \(result.hits)")
     }
 
     /// 反向：加了标记的区块必须被整体剔除，标记外的内容仍要保留。
@@ -471,25 +507,26 @@ final class GenderNeutralScannerTests: XCTestCase {
         // gender-neutral-scan:on
         let tail = "谁让她"
         """
-        let (scannable, blocks) = Scanner.strippingExemptBlocks(source)
-        XCTAssertEqual(blocks, 1, "应当识别到恰好 1 个豁免区块")
-
-        XCTAssertFalse(scannable.contains("她也"), "豁免区块内的内容没被剔除")
-        XCTAssertTrue(scannable.contains("你让她很难受"), "豁免区块外的内容被误删了")
-        XCTAssertTrue(scannable.contains("谁让她"), "标记之后的内容应当恢复扫描")
+        let result = Scanner.scan(source)
+        XCTAssertEqual(result.skippedBlocks, 1, "应当识别到恰好 1 个豁免区块")
+        XCTAssertEqual(result.hits.count, 2, "标记外那两行应当命中，实际 \(result.hits)")
+        XCTAssertFalse(
+            result.hits.contains { $0.text.contains("她也") },
+            "豁免区块内的内容被当成文案了"
+        )
     }
 
-    /// 边界：标记只开关一次时，不能把后半段整段吞掉。
-    func testUnclosedMarkerDoesNotLeakIntoRestOfFile() {
+    /// 边界：`:on` 之后必须恢复扫描，否则半张文件会失明。
+    func testMarkerTurnsScanningBackOn() {
         let source = """
         // gender-neutral-scan:off
         let a = "她先"
         // gender-neutral-scan:on
         let b = "让他"
         """
-        let (scannable, blocks) = Scanner.strippingExemptBlocks(source)
-        XCTAssertEqual(blocks, 1)
-        XCTAssertFalse(scannable.contains("她先"))
-        XCTAssertTrue(scannable.contains("让他"), "标记关闭后应当恢复扫描，否则半张文件会失明")
+        let result = Scanner.scan(source)
+        XCTAssertEqual(result.skippedBlocks, 1)
+        XCTAssertEqual(result.hits.count, 1, "标记关闭后应当恢复扫描，实际 \(result.hits)")
+        XCTAssertTrue(result.hits[0].text.contains("让他"))
     }
 }
