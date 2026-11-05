@@ -15,7 +15,7 @@ fail=0
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; fail=1; }
 
-echo "▶ 1/5 Core 文件与 logic-check 清单一致性"
+echo "▶ 1/6 Core 文件与 logic-check 清单一致性"
 # 与 .github/workflows/ios.yml 里那段保持同一份 EXCLUDED。
 # 这里重复一遍是有意的：如果 CI 改了而这里没改，本脚本会立刻发现不一致
 # （见第 5 步的一致性交叉校验）。
@@ -42,7 +42,7 @@ while IFS= read -r f; do
 done < Tools/logic-check/sources.txt
 [ -z "$STALE" ] && ok "清单无失效引用" || bad "sources.txt 引用了不存在的文件:$STALE"
 
-echo "▶ 2/5 logic-check 冒烟真能编译并跑通"
+echo "▶ 2/6 logic-check 冒烟真能编译并跑通"
 # 只校验清单不校验能不能编，等于让 CI 从"清单不全"变成"编译失败"。
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 if swiftc -o /tmp/lc-verify \
@@ -57,7 +57,7 @@ else
   bad "冒烟编译失败：$(grep -m1 'error:' /tmp/lc-err.txt)"
 fi
 
-echo "▶ 3/5 服务端测试（邀请协议与 Worker）"
+echo "▶ 3/6 服务端测试（邀请协议与 Worker）"
 if [ -f Tools/ai-proxy/package.json ]; then
   # 两个文件分别跑，不要用 && 串起来。
   # 串起来时前一个失败会让后一个根本不执行，而报错信息里只有前者的日志，
@@ -74,10 +74,31 @@ else
   bad "缺少 Tools/ai-proxy/package.json（ESM 需要它，否则 import 会当 CommonJS 报错）"
 fi
 
-echo "▶ 4/5 邀请网页必须渲染出全部题目"
-# 上一轮的真实事故：网页截图只有标题，四个问题一个都没渲染出来。
-# 这条断言直接读 invite.js 源码 + 用真实路径跑一次无头 Chrome，
-# 不允许再靠"看截图才发现"。
+echo "▶ 4/6 页面脚本能被解析器接受（不需要浏览器）"
+# 独立于浏览器的一道闸门，专门拦"模板字符串被自己写坏"这一类错误。
+#
+# 为什么单独一条：页面 JS 整个写在模板字符串里，注释里出现一个反引号
+# 就会把字符串切断，报 SyntaxError: Unexpected identifier。
+# 这个坑在本轮踩了**三次** —— 每次写注释解释转义问题，就会把转义符号
+# 或反引号本身写进注释。靠"记住别写"不可靠，得让机器判定。
+#
+# ## 判据选错过一次
+#
+# 第一版是"把模板字符串切出来、抽 script 块、交给 new Function 解析"。
+# 反向验证时故意插一个反引号，它**没报错** —— 因为反引号让
+# `indexOf("</html>`")` 提前命中，切出来的片段恰好语法合法。
+# 也就是说：切口本身被污染了，而我拿一个被污染的输入去证明"没问题"。
+#
+# 改用最直接的判据：让 Node 把整个模块解析一遍。
+# 模板字符串坏了，模块就加载不起来，异常信息也直指问题。
+# 顺带还覆盖了模块级的其它语法错误，比只看 script 块更完整。
+if node -e 'import("./Tools/ai-proxy/invite.js").then(() => process.exit(0)).catch((e) => { console.error(e.message.split("\n")[0]); process.exit(1); })' >/tmp/parse.log 2>&1; then
+  ok "页面脚本语法合法（模块可加载）"
+else
+  bad "页面脚本语法错误：$(tail -1 /tmp/parse.log)"
+fi
+
+echo "▶ 5/6 邀请网页必须渲染出全部题目"
 if command -v node >/dev/null && [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then
   if node Tools/watchdog/check-invite-page.mjs >/tmp/invpage.log 2>&1; then
     ok "$(tail -1 /tmp/invpage.log)"
@@ -88,7 +109,7 @@ else
   echo "  – 跳过（缺 node 或 Chrome）"
 fi
 
-echo "▶ 5/5 工作状态文件新鲜度"
+echo "▶ 6/6 工作状态文件新鲜度"
 if [ ! -f WORK_STATE.md ]; then
   bad "WORK_STATE.md 不存在 —— 中断后无法接手"
 else
@@ -96,7 +117,7 @@ else
   if [ -n "$(find WORK_STATE.md -mtime +1 2>/dev/null)" ]; then
     bad "WORK_STATE.md 超过 24 小时未更新 —— 进度可能没落盘"
   else
-    ok "已更新（$(grep -m1 '最后一次更新' WORK_STATE.md | sed 's/.*：//')）"
+    ok "已更新（$(grep -m1 -E '最后一次更新|最后更新' WORK_STATE.md | sed 's/.*：//' | sed 's/^ *//')）"
   fi
 fi
 

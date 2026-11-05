@@ -206,7 +206,45 @@ if (ta409.result.result.value > 0) {
   fail("链接已提交时仍渲染了输入框 —— 用户会白填一遍才发现提交不了");
 }
 
+// ---- 5. 降级环境：没有 WebCrypto 时必须给中文指引，而不是抛异常 ----
+//
+// 这是**真实会遇到的场景**，不是假想：
+// 微信等 App 内置浏览器可能裁掉 `crypto.subtle`，或页面被 http 打开时
+// 根本不是安全上下文。那种情况下如果直接调 `crypto.subtle.importKey`，
+// 会抛 TypeError —— 而这一步发生在提交时，用户已经写完四个题了。
+//
+// 用 `Page.addScriptToEvaluateOnNewDocument` 在页面脚本之前把 crypto.subtle 抹掉，
+// 精确模拟这种环境。这比"读代码觉得没问题"可靠得多。
+claimMode = "ok";
+await send("Page.addScriptToEvaluateOnNewDocument", {
+  source: `try {
+    Object.defineProperty(crypto, "subtle", { value: undefined, configurable: true });
+  } catch (e) {}
+  try { Object.defineProperty(window, "isSecureContext", { value: false, configurable: true }); } catch (e) {}`,
+});
+await send("Page.navigate", { url: `http://127.0.0.1:${port}/v1/invite/nocryptocaseid001/page#${keyB64}` });
+await sleep(2500);
+
+const probeNoCrypto = await send("Runtime.evaluate", {
+  expression: `JSON.stringify({
+    bodyText: document.body.innerText,
+    textareas: document.querySelectorAll("textarea").length,
+    hasNoCryptoError: /不支持|https 打开/.test(document.body.innerText)
+  })`,
+  returnByValue: true,
+});
+const noCrypto = JSON.parse(probeNoCrypto.result.result.value);
+
+if (!noCrypto.hasNoCryptoError) {
+  chrome.kill("SIGKILL"); server.close();
+  fail("浏览器没有 WebCrypto 时页面没有给出中文指引 —— 用户只会看到空白或技术错误");
+}
+if (noCrypto.textareas > 0) {
+  chrome.kill("SIGKILL"); server.close();
+  fail("浏览器没有 WebCrypto 时仍然渲染了输入框 —— 用户写完四个题才发现提交不了，内容全丢");
+}
+
 writeFileSync(join(tmpdir(), "invite-page-check.html"), html);
 chrome.kill("SIGKILL");
 server.close();
-console.log(`${qIds.length} 题在浏览器里真实渲染；409 有明确提示；JS 无异常`);
+console.log(`${qIds.length} 题在浏览器里真实渲染；409 有明确提示；无 WebCrypto 时有中文指引；JS 无异常`);

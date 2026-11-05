@@ -323,6 +323,37 @@ function renderInvitePage() {
     return;
   }
 
+  // ## 先确认这个浏览器能不能加密，再渲染任何东西
+  //
+  // 全部加密都靠 WebCrypto（crypto.subtle）。它在**安全上下文**（HTTPS）下才有，
+  // 且部分 App 内置浏览器会把它裁掉。拿不到时 subtle 是 undefined，
+  // 调用处会抛 TypeError —— 而这一步在 submit() 里，
+  // 也就是**用户把四个题全写完、点提交之后才发现失败**，写的东西全丢了。
+  //
+  // 那样太糟：白花十几分钟打字，然后得到一个技术错误。
+  // 所以在这里提前判断，直接告诉对方"换个浏览器打开"，
+  // 并且明确说明还没有开始写、不会丢内容。
+  //
+  // 这个判断本身不依赖任何外部能力，所以放在最前面永远是安全的。
+  //
+  // 注意：这段注释里不能出现反引号。整个页面脚本写在模板字符串里，
+  // 一个反引号就会把它切断，报 SyntaxError: Unexpected identifier。
+  // 这一轮已经是第三次踩，写法上干脆一律不用反引号。
+  var cryptoSupported = (typeof crypto !== "undefined"
+    && crypto.subtle
+    && typeof crypto.subtle.importKey === "function");
+  if (!cryptoSupported) {
+    // 分两种情况说清楚。混在一起说会让人不知道该做什么：
+    // · http 打开 → 是地址的问题，换成 https 就行
+    // · https 但没有 subtle → 是浏览器的问题，换一个浏览器
+    if (typeof isSecureContext !== "undefined" && isSecureContext === false) {
+      setStatus("这个链接需要用 https 打开才能加密。请让对方把完整链接重新发一次（要看得到 https:// 开头）。");
+    } else {
+      setStatus("这个浏览器不支持加密填写。请点右上角「…」，选择「在浏览器中打开」后再试；你还没有输入任何内容，不会丢失。");
+    }
+    return;
+  }
+
   // ---- 加密（WebCrypto，全在浏览器本地完成） ----
   function b64ToBytes(b64) {
     var bin = atob(b64.replace(/-/g, "+").replace(/_/g, "/"));
