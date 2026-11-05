@@ -48,4 +48,31 @@ enum WaitingCopy {
         }
         return "还没收到 TA 那一份"
     }
+
+    // MARK: - 「TA 打开了链接」这一行
+    //
+    // 同一个坑的第三处。`InviteStatus.counterpartOpenedLink` 来自服务端
+    // `slots.b`；当 `status == nil`（还没查过 / 查询失败）时**根本没有这个值**，
+    // 但视图原先写的是 `status?.counterpartOpenedLink == true ? "已经打开过了" : "还没有打开"`
+    // —— 把"没有值"和"值是 false"合并成了同一句「还没有打开」。
+    //
+    // 截图抓到的实际画面：顶部红条写着「连不上服务端」，
+    // 紧接着下面却笃定地说「TA 打开了链接 / 还没有打开」。
+    // 连不上服务端时，我们**不可能**知道对方有没有点开。
+    // 这和「TA 还没提交」是同一类错误：把不知道说成知道。
+
+    /// 「TA 打开了链接」这一行的说明文字。
+    ///
+    /// - Parameter opened: `nil` 表示状态未知（还没查到或查询失败）。
+    static func openedLinkDetail(opened: Bool?) -> String {
+        guard let opened else { return "暂时查不到" }
+        return opened ? "已经打开过了" : "还没有打开"
+    }
+
+    /// 「TA 打开了链接」这一行的圆点是否画成"进行中"。
+    ///
+    /// 未知时**不画进行中**：进行中是一种断言，而我们什么都不知道。
+    static func openedLinkIsInProgress(opened: Bool?) -> Bool {
+        opened == false
+    }
 }

@@ -277,11 +277,15 @@ struct RemoteHandoverView: View {
                 .font(ThemeManager.Typography.caption)
                 .foregroundStyle(ThemeManager.Colors.textSecondary)
 
+            // 「TA 打开了链接」这一行。
+            //
+            // 措辞规则在 `Core/WaitingCopy.swift`：`status == nil`（连不上服务端、
+            // 或还没查过）时**不能**说「还没有打开」—— 那时我们不知道对方做了什么。
             stepRow(
                 done: status?.counterpartOpenedLink == true,
-                inProgress: status?.counterpartOpenedLink != true,
+                inProgress: WaitingCopy.openedLinkIsInProgress(opened: status?.counterpartOpenedLink),
                 title: "TA 打开了链接",
-                detail: status?.counterpartOpenedLink == true ? "已经打开过了" : "还没有打开"
+                detail: WaitingCopy.openedLinkDetail(opened: status?.counterpartOpenedLink)
             )
 
             stepRow(

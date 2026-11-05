@@ -360,6 +360,37 @@ check("连续查不到才解释同步延迟", copyWaiting2.contains("同步"))
 // 三档必须真的不同，否则"分档"是个空壳
 check("三档文案两两不同", copyWaiting0 != copyWaiting1 || copyWaiting1 != copyWaiting2)
 
+// MARK: - 「TA 打开了链接」这一行（同一个坑的第三处）
+
+// 背景：`InviteStatus.counterpartOpenedLink` 来自服务端 `slots.b`。
+// `status == nil`（连不上服务端 / 还没查过）时**没有这个值**，
+// 而视图原先写 `== true ? "已经打开过了" : "还没有打开"`，
+// 把"没有值"和"值是 false"合并成了同一句 —— 于是出现
+// 「连不上服务端」和「TA 还没打开」同时出现在一屏的画面。
+// 连不上时我们不可能知道对方做了什么，这和「还没提交」是同一类错误。
+
+let openedUnknown = WaitingCopy.openedLinkDetail(opened: nil)
+let openedYes = WaitingCopy.openedLinkDetail(opened: true)
+let openedNo = WaitingCopy.openedLinkDetail(opened: false)
+
+check("未知时不出现「还没有打开」", !openedUnknown.contains("还没有打开"))
+check("未知时不出现「已经打开过」", !openedUnknown.contains("已经打开过"))
+check("未知时明确说查不到", openedUnknown.contains("查不到"))
+check("已打开时说已打开", openedYes == "已经打开过了")
+check("确认未打开时才说未打开", openedNo == "还没有打开")
+
+// 三档必须互不相同，否则"区分未知"这件事没真正发生
+check(
+    "打开状态三档两两不同",
+    Set([openedUnknown, openedYes, openedNo]).count == 3
+)
+
+// 圆点状态：未知时**不能**画进行中（进行中本身就是一种断言）
+check("未知时不画进行中圆点", !WaitingCopy.openedLinkIsInProgress(opened: nil))
+check("确认未打开时才画进行中圆点", WaitingCopy.openedLinkIsInProgress(opened: false))
+check("已打开时不画进行中圆点", !WaitingCopy.openedLinkIsInProgress(opened: true))
+
+print("")
 // MARK: - JSON 提取（两处合并后的回归护栏）
 
 // 背景：`DisputeVerdictParser` 原本自带一份 40 行的 `extractJSONObject`，
