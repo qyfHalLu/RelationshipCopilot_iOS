@@ -227,7 +227,7 @@ console.log("\n[快速工具 · 提示词不自相矛盾]");
   await worker.fetch(makeRequest("/v1/assist", { tool: "phrase", input: "x" }), env);
   const phrase = calls[0].body.messages[0].content;
   check("phrase 不该同时要求「给原话」和「不要给成品」", !phrase.includes("可以直接使用的原话"));
-  check("phrase 明确禁止成品", phrase.includes("不要给他一段可以复制粘贴的话"));
+  check("phrase 明确禁止成品", phrase.includes("不要给用户一段可以复制粘贴的话"));
 
   const second = makeEnv({ modelResponse: okResponse("x") });
   await worker.fetch(makeRequest("/v1/assist", { tool: "conflict", input: "x" }), second.env);

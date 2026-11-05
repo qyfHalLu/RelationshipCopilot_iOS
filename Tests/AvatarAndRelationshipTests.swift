@@ -217,7 +217,9 @@ final class GenderNeutralCopyTests: XCTestCase {
         "Presentation/Views/Auth/AuthenticationView.swift",
         "Presentation/Views/Recording/RecordingView.swift",
         "Presentation/Views/Analysis/AnalysisView.swift",
-        "Presentation/Views/Analysis/SessionDetailView.swift"
+        "Presentation/Views/Analysis/SessionDetailView.swift",
+        // 服务端提示词：这是**第二份**同源文案，容易只改一边
+        "Tools/ai-proxy/worker.js"
     ]
 
 
@@ -268,6 +270,13 @@ final class GenderNeutralCopyTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(
             scannedFiles, 3,
             "只扫到 \(scannedFiles) 个文件，扫描逻辑可能失效了"
+        )
+        // **清单里的路径必须全部读到。**
+        // 少读一个不报错的话，改个文件名就能让覆盖率悄悄归零 ——
+        // 而测试仍然是绿的，因为"没扫到"和"扫了但干净"看起来一样。
+        XCTAssertEqual(
+            scannedFiles, Self.filesToScan.count,
+            "清单里有 \(Self.filesToScan.count - scannedFiles) 个文件没读到（路径写错或被移走），那部分等于没扫"
         )
         // 同理：一行都没扫到的话，「没有 offender」也是假的。
         XCTAssertGreaterThanOrEqual(
